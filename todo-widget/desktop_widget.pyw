@@ -690,8 +690,8 @@ class ReminderPopup(tk.Toplevel):
 
 # ================= 自定义输入打卡弹窗 =================
 class CheckinDialog(tk.Toplevel):
-    def __init__(self, task, on_submit):
-        super().__init__()
+    def __init__(self, master, task, on_submit):
+        super().__init__(master)
         self.task = task
         self.on_submit = on_submit
         self.title('打卡')
@@ -851,13 +851,12 @@ class AddTaskDialog(tk.Toplevel):
                        activeforeground=ACCENT, selectcolor=CARD, command=self._on_check_change)\
             .pack(side='left')
 
-        self.prompt_label = tk.Label(self.content, text='输入提示词（如：输入完成时间：）', bg=CARD, fg=SUB,
+        self.prompt_label = tk.Label(self.content, text='输入提示词', bg=CARD, fg=SUB,
                                      font=FONT_SMALL, anchor='w')
         self.prompt_label.pack(fill='x', padx=16, pady=(8, 0))
         self.prompt_entry = tk.Entry(self.content, font=FONT_TEXT, relief='flat', bg='#f2f4fa', fg=TEXT,
                                      insertbackground=TEXT)
         self.prompt_entry.pack(fill='x', padx=16, ipady=6)
-        self.prompt_entry.insert(0, '输入完成时间：')
         self.prompt_entry.bind('<Button-1>', self._on_prompt_click)
         self._on_check_change()
 
@@ -903,7 +902,7 @@ class AddTaskDialog(tk.Toplevel):
 
         self.check_var.set(t.get('check_type', 'checkbox'))
         self.prompt_entry.delete(0, 'end')
-        self.prompt_entry.insert(0, t.get('check_prompt', '输入完成时间：'))
+        self.prompt_entry.insert(0, t.get('check_prompt', ''))
         self._on_check_change()
 
     def _clear_date_area(self):
@@ -1009,7 +1008,7 @@ class AddTaskDialog(tk.Toplevel):
             'text': text,
             'type': t,
             'check_type': self.check_var.get(),
-            'check_prompt': self.prompt_entry.get().strip() or '请输入内容：',
+            'check_prompt': self.prompt_entry.get().strip(),
             'remind_enabled': self.remind_var.get(),
             'remind_time': None,
             'active': True,
@@ -1672,7 +1671,7 @@ class TodoWidget:
     def do_checkin(self, task):
         data = load_all()
         if task['check_type'] == 'text':
-            CheckinDialog(self.root, lambda val: self._record(data, task, val))
+            CheckinDialog(self.root, task, lambda val: self._record(data, task, val))
         else:
             if self._is_weekly_once(task):
                 wr = cycle_records(data['records'], task['id'], today(), task.get('reset_weekday', 0))
