@@ -656,7 +656,7 @@ class ReminderPopup(tk.Toplevel):
         self.attributes('-topmost', True)
         self.configure(bg=CARD)
 
-        w, h = 300, 130
+        w, h = 300, 152
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
         self.geometry('%dx%d+%d+%d' % (w, h, sw - w - 24, sh - h - 70))
@@ -670,13 +670,13 @@ class ReminderPopup(tk.Toplevel):
             .pack(anchor='w', padx=16, pady=(2, 8))
 
         bar = tk.Frame(self, bg=CARD)
-        bar.pack(fill='x', padx=12)
-        tk.Button(bar, text='去打卡', bg=ACCENT, fg='white', bd=0, font=FONT_SMALL,
+        bar.pack(fill='x', padx=16, pady=(4, 14))
+        tk.Button(bar, text='去打卡', bg=ACCENT, fg='white', bd=0, font=FONT_TEXT,
                   activebackground=ACCENT2, activeforeground='white', cursor='hand2',
-                  command=lambda: (on_checkin(), self.destroy())).pack(side='left', padx=6, ipadx=10, ipady=4)
-        tk.Button(bar, text='稍后', bg='#eef0f7', fg=TEXT, bd=0, font=FONT_SMALL,
+                  command=lambda: (on_checkin(), self.destroy())).pack(side='left', padx=6, ipadx=14, ipady=7)
+        tk.Button(bar, text='稍后', bg='#eef0f7', fg=TEXT, bd=0, font=FONT_TEXT,
                   activebackground=LINE, cursor='hand2',
-                  command=lambda: (on_later(), self.destroy())).pack(side='left', padx=6, ipadx=10, ipady=4)
+                  command=lambda: (on_later(), self.destroy())).pack(side='left', padx=6, ipadx=14, ipady=7)
 
         self.lift()
         self.after(60000, self._auto_close)  # 1 分钟自动关闭
@@ -1529,20 +1529,12 @@ class TodoWidget:
         self.body = tk.Frame(self.root, bg=BG)
         self.body.pack(fill='both', expand=True)
 
-        # 进度
-        bar_card = tk.Frame(self.body, bg=CARD)
-        bar_card.pack(fill='x', padx=10, pady=(10, 6))
-        self.progress_label = tk.Label(bar_card, text='', bg=CARD, fg=SUB, font=FONT_SMALL)
-        self.progress_label.pack(anchor='w', padx=12, pady=(8, 4))
-        self.progress_canvas = tk.Canvas(bar_card, width=336, height=8, bg=CARD, highlightthickness=0)
-        self.progress_canvas.pack(padx=12, pady=(0, 10))
-
-        # 列表
-        list_wrap = tk.Frame(self.body, bg=CARD)
-        list_wrap.pack(fill='both', expand=True, padx=10, pady=(6, 6))
-        self.canvas = tk.Canvas(list_wrap, bg=CARD, highlightthickness=0, bd=0)
+        # 列表（分组进度条 + 任务，滚动）
+        list_wrap = tk.Frame(self.body, bg=BG)
+        list_wrap.pack(fill='both', expand=True, padx=10, pady=(10, 6))
+        self.canvas = tk.Canvas(list_wrap, bg=BG, highlightthickness=0, bd=0)
         self.scrollbar = tk.Scrollbar(list_wrap, orient='vertical', command=self.canvas.yview, width=8)
-        self.list_frame = tk.Frame(self.canvas, bg=CARD)
+        self.list_frame = tk.Frame(self.canvas, bg=BG)
         self.list_frame.bind('<Configure>',
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
         self.canvas_window = self.canvas.create_window((0, 0), window=self.list_frame, anchor='nw')
@@ -1764,24 +1756,44 @@ class TodoWidget:
 
         self.title_label.config(text='📋 %s · %s' % (today_iso(), WEEK_FULL[today().weekday()]))
 
-        done = sum(1 for t in tasks if is_done(t, data['records'], today()))
-        total = len(tasks)
-        self.progress_label.config(text='今日进度 %d / %d' % (done, total))
-        self.progress_canvas.delete('all')
-        self.progress_canvas.create_rectangle(0, 0, 336, 8, fill='#eef0f7', outline='')
-        if total:
-            self.progress_canvas.create_rectangle(0, 0, 336 * done / total, 8, fill=ACCENT, outline='')
-
         for child in self.list_frame.winfo_children():
             child.destroy()
 
         if not tasks:
             tk.Label(self.list_frame,
                      text='今天没有待办\n点下方「＋ 添加待办」创建\n支持每日/一次性/每周/自定义周期',
-                     bg=CARD, fg=SUB, font=FONT_SMALL, justify='center').pack(pady=30)
+                     bg=BG, fg=SUB, font=FONT_SMALL, justify='center').pack(pady=40)
             return
 
-        for t in tasks:
+        # 按周期种类分组
+        today_group = [t for t in tasks if t['type'] in ('daily', 'once')]
+        weekly_group = [t for t in tasks if t['type'] == 'weekly']
+        custom_group = [t for t in tasks if t['type'] == 'custom']
+
+        # 自定义周期任务：总数按所有活跃的自定义周期任务计
+        all_custom = [t for t in data['tasks'] if t.get('type') == 'custom' and t.get('active', True)]
+
+        self._render_group('今日进度', today_group, data, len(today_group))
+        self._render_group('本周进度', weekly_group, data, len(weekly_group))
+        self._render_group('周期进度', custom_group, data, len(all_custom))
+
+    def _render_group(self, title, group, data, total):
+        if not group:
+            return   # 该类型没有任务，不显示进度条
+
+        done = sum(1 for t in group if is_done(t, data['records'], today()))
+
+        card = tk.Frame(self.list_frame, bg=CARD)
+        card.pack(fill='x', pady=(4, 2))
+        tk.Label(card, text='%s  %d / %d' % (title, done, total), bg=CARD, fg=TEXT,
+                 font=FONT_SMALL).pack(anchor='w', padx=12, pady=(8, 4))
+        c = tk.Canvas(card, width=308, height=6, bg=CARD, highlightthickness=0)
+        c.pack(padx=12, pady=(0, 10))
+        c.create_rectangle(0, 0, 308, 6, fill='#eef0f7', outline='')
+        if total:
+            c.create_rectangle(0, 0, 308 * done / total, 6, fill=ACCENT, outline='')
+
+        for t in group:
             self._render_task(t)
 
     def _render_task(self, t):
