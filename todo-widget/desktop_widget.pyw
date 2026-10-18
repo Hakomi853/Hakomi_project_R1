@@ -858,6 +858,7 @@ class AddTaskDialog(tk.Toplevel):
                                      insertbackground=TEXT)
         self.prompt_entry.pack(fill='x', padx=16, ipady=6)
         self.prompt_entry.insert(0, '输入完成时间：')
+        self.prompt_entry.bind('<Button-1>', self._on_prompt_click)
         self._on_check_change()
 
     def _scroll(self, event):
@@ -987,10 +988,15 @@ class AddTaskDialog(tk.Toplevel):
     def _on_check_change(self):
         if self.check_var.get() == 'text':
             self.prompt_label.config(fg=ACCENT)
-            self.prompt_entry.config(state='normal')
         else:
             self.prompt_label.config(fg=SUB)
-            self.prompt_entry.config(state='disabled')
+        # 提示词框始终可编辑，点击时自动切换到「自定义输入」
+        self.prompt_entry.config(state='normal')
+
+    def _on_prompt_click(self, e):
+        if self.check_var.get() != 'text':
+            self.check_var.set('text')
+            self._on_check_change()
 
     def _save(self):
         text = self.name_entry.get().strip()
