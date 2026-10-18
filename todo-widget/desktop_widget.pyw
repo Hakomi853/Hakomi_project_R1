@@ -1665,24 +1665,33 @@ class TodoWidget:
     def do_checkin(self, task):
         data = load_all()
         if task['check_type'] == 'text':
-            CheckinDialog(self.root, task, lambda val: self._record(data, task, val))
-        else:
-            if self._is_weekly_once(task):
-                wr = cycle_records(data['records'], task['id'], today(), task.get('reset_weekday', 0))
-                if wr:
-                    ids = {r['id'] for r in wr}
-                    data['records'] = [r for r in data['records'] if r['id'] not in ids]
-                    save_all(data)
-                else:
-                    self._record(data, task, None)
+            # 自定义输入：已完成则取消打钩，否则弹输入框
+            if is_done(task, data['records'], today()):
+                self._cancel_checkin(data, task)
+                self.refresh()
             else:
-                rec = get_record(data['records'], task['id'], today_iso())
-                if rec:
-                    data['records'] = [r for r in data['records'] if r['id'] != rec['id']]
-                    save_all(data)
-                else:
-                    self._record(data, task, None)
+                CheckinDialog(self.root, task, lambda val: self._record(data, task, val))
+        else:
+            # 一次性打钩：已完成则取消，否则记录
+            if is_done(task, data['records'], today()):
+                self._cancel_checkin(data, task)
+            else:
+                self._record(data, task, None)
             self.refresh()
+
+    def _cancel_checkin(self, data, task):
+        """取消打卡：删除当天记录（每周一次/自定义期限类删本周全部）"""
+        if self._is_weekly_once(task):
+            wr = cycle_records(data['records'], task['id'], today(), task.get('reset_weekday', 0))
+            ids = {r['id'] for r in wr}
+            if ids:
+                data['records'] = [r for r in data['records'] if r['id'] not in ids]
+                save_all(data)
+        else:
+            rec = get_record(data['records'], task['id'], today_iso())
+            if rec:
+                data['records'] = [r for r in data['records'] if r['id'] != rec['id']]
+                save_all(data)
 
     def _record(self, data, task, value):
         data.setdefault('records', []).append({
