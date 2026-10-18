@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>每日待办 · Daily Todo</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --text: #1f2430;
+    --text-sub: #8a93a6;
+    --accent: #5b6cff;
+    --accent-2: #8a5bff;
+    --danger: #ff5d73;
+    --success: #23c16b;
+    --line: #eceef4;
+    --shadow: 0 10px 40px rgba(31, 36, 48, 0.08);
+    --radius: 18px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 40px 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .app {
+    width: 100%;
+    max-width: 560px;
+  }
+
+  /* 头部 */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .header .date-block h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+  .header .date-block p {
+    color: var(--text-sub);
+    font-size: 14px;
+    margin-top: 4px;
+  }
+  .weather-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--text-sub);
+  }
+
+  /* 卡片 */
+  .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+
+  /* 进度 */
+  .progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .progress-head .label {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .progress-head .num {
+    font-size: 13px;
+    color: var(--text-sub);
+    font-variant-numeric: tabular-nums;
+  }
+  .progress-bar {
+    height: 10px;
+    background: #eef0f7;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .progress-bar .fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 10px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* 输入框 */
+  .input-row {
+    display: flex;
+    gap: 10px;
+  }
+  .input-row input {
+    flex: 1;
+    border: 2px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+    font-size: 15px;
+    outline: none;
+    transition: border-color 0.2s;
+    background: #fafbfe;
+    color: var(--text);
+  }
+  .input-row input:focus {
+    border-color: var(--accent);
+    background: #fff;
+  }
+  .btn {
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+    border-radius: 12px;
+    transition: transform 0.08s, opacity 0.2s, background 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn-add {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #fff;
+    padding: 12px 20px;
+    box-shadow: 0 6px 16px rgba(91, 108, 255, 0.35);
+  }
+  .btn-add:hover { opacity: 0.92; }
+
+  /* 过滤器 */
+  .filters {
+    display: flex;
+    gap: 8px;
+    margin: 4px 0 16px;
+  }
+  .filter {
+    padding: 7px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--text-sub);
+    background: transparent;
+    border: 1px solid var(--line);
+    transition: all 0.2s;
+  }
+  .filter.active {
+    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+
+  /* 列表 */
+  .list { list-style: none; }
+  .item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 6px;
+    border-bottom: 1px solid var(--line);
+    animation: slideIn 0.25s ease;
+  }
+  .item:last-child { border-bottom: none; }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .checkbox {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid #cfd4e0;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    color: transparent;
+    font-size: 12px;
+  }
+  .checkbox.checked {
+    background: var(--success);
+    border-color: var(--success);
+    color: #fff;
+  }
+
+  .item .content { flex: 1; min-width: 0; }
+  .item .title {
+    font-size: 15px;
+    word-break: break-word;
+    transition: color 0.2s;
+  }
+  .item .meta {
+    font-size: 12px;
+    color: var(--text-sub);
+    margin-top: 2px;
+  }
+  .item.done .title {
+    color: var(--text-sub);
+    text-decoration: line-through;
+  }
+
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 8px;
+    margin-right: 4px;
+  }
+  .tag-high { background: #ffe4e8; color: #e0435a; }
+  .tag-mid  { background: #fff1dc; color: #d98a1b; }
+  .tag-low  { background: #e4f4ec; color: #1e9a5e; }
+
+  .item .actions { display: flex; gap: 4px; }
+  .icon-btn {
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    background: transparent;
+    color: var(--text-sub);
+    font-size: 15px;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-btn:hover { background: #f0f2f8; }
+  .icon-btn.del:hover { background: #ffecef; color: var(--danger); }
+
+  .empty {
+    text-align: center;
+    padding: 40px 10px;
+    color: var(--text-sub);
+    font-size: 14px;
+  }
+  .empty .emoji { font-size: 40px; display: block; margin-bottom: 10px; }
+
+  .footer-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 4px;
+  }
+  .link-btn {
+    border: none; background: none;
+    color: var(--text-sub);
+    cursor: pointer;
+    font-size: 13px;
+    text-decoration: underline;
+  }
+  .link-btn:hover { color: var(--danger); }
+
+  .done-tip {
+    text-align: center;
+    color: var(--success);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 20px 0 8px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <div class="date-block">
+      <h1 id="dateTitle">今日待办</h1>
+      <p id="dateSub">加载中…</p>
+    </div>
+    <span class="weather-tag" id="streak">🔥 连续 0 天</span>
+  </div>
+
+  <div class="card">
+    <div class="progress-head">
+      <span class="label">今日进度</span>
+      <span class="num" id="progressNum">0 / 0</span>
+    </div>
+    <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+
+    <div class="input-row" style="margin-top:16px;">
+      <input type="text" id="todoInput" placeholder="添加一个待办，回车确认…" maxlength="100">
+      <select id="prioritySel" style="border:2px solid var(--line);border-radius:12px;padding:0 8px;background:#fafbfe;color:var(--text);font-size:14px;outline:none;cursor:pointer;">
+        <option value="low">🟢 低</option>
+        <option value="mid" selected>🟡 中</option>
+        <option value="high">🔴 高</option>
+      </select>
+      <button class="btn btn-add" id="addBtn">＋ 添加</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="filters">
+      <button class="filter active" data-filter="all">全部</button>
+      <button class="filter" data-filter="active">进行中</button>
+      <button class="filter" data-filter="done">已完成</button>
+    </div>
+    <ul class="list" id="list"></ul>
+    <div class="empty" id="emptyState" style="display:none;">
+      <span class="emoji">📝</span>
+      今天还没有待办，添加一个开始吧！
+    </div>
+    <div class="footer-actions">
+      <button class="link-btn" id="clearDone">清除已完成</button>
+      <button class="link-btn" id="prevDay">← 查看历史</button>
+    </div>
+  </div>
+
+  <p style="text-align:center;color:var(--text-sub);font-size:12px;margin-top:8px;">
+    数据保存在本地浏览器，每天自动新建一份
+  </p>
+</div>
+
+<script>
+(function () {
+  const KEY_PREFIX = 'daily-todo-v1.';
+
+  // 日期工具
+  function dateKey(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + day;
+  }
+  function todayKey() { return dateKey(new Date()); }
+
+  const weekNames = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+
+  // 状态
+  let currentDate = todayKey();      // 当前查看的日期
+  let filter = 'all';
+
+  // 数据存取
+  function load(date) {
+    try {
+      return JSON.parse(localStorage.getItem(KEY_PREFIX + date)) || [];
+    } catch (e) { return []; }
+  }
+  function save(date, items) {
+    localStorage.setItem(KEY_PREFIX + date, JSON.stringify(items));
+  }
+
+  // DOM
+  const $ = (s) => document.querySelector(s);
+  const dateTitle = $('#dateTitle');
+  const dateSub = $('#dateSub');
+  const streakEl = $('#streak');
+  const todoInput = $('#todoInput');
+  const prioritySel = $('#prioritySel');
+  const addBtn = $('#addBtn');
+  const list = $('#list');
+  const emptyState = $('#emptyState');
+  const progressNum = $('#progressNum');
+  const progressFill = $('#progressFill');
+  const clearDone = $('#clearDone');
+  const prevDay = $('#prevDay');
+
+  // 计算连续打卡天数
+  function calcStreak() {
+    let streak = 0;
+    const d = new Date();
+    // 从今天开始往前数
+    while (true) {
+      const items = load(dateKey(d));
+      if (items.length > 0 && items.every(t => t.done)) {
+        streak++;
+        d.setDate(d.getDate() - 1);
+      } else {
+        // 今天还没完成，先看昨天
+        if (streak === 0) {
+          d.setDate(d.getDate() - 1);
+          continue;
+        }
+        break;
+      }
+    }
+    return streak;
+  }
+
+  function render() {
+    const items = load(currentDate);
+    const isToday = currentDate === todayKey();
+
+    // 头部日期
+    if (isToday) {
+      dateTitle.textContent = '今日待办';
+    } else {
+      dateTitle.textContent = currentDate + ' 的待办';
+    }
+    const now = new Date();
+    const dKey = currentDate.split('-').map(Number);
+    const d = new Date(dKey[0], dKey[1] - 1, dKey[2]);
+    dateSub.textContent = currentDate + ' · ' + weekNames[d.getDay()];
+
+    // 连续天数
+    const streak = calcStreak();
+    streakEl.textContent = streak > 0 ? '🔥 连续 ' + streak + ' 天' : '✨ 今日开始';
+
+    // 进度
+    const done = items.filter(t => t.done).length;
+    progressNum.textContent = done + ' / ' + items.length;
+    progressFill.style.width = items.length ? (done / items.length * 100) + '%' : '0%';
+
+    // 列表
+    const filtered = items.filter(t => {
+      if (filter === 'active') return !t.done;
+      if (filter === 'done') return t.done;
+      return true;
+    });
+
+    list.innerHTML = '';
+    emptyState.style.display = filtered.length ? 'none' : 'block';
+
+    // 排序：未完成在前，按优先级
+    const order = { high: 0, mid: 1, low: 2 };
+    filtered.sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      return order[a.priority] - order[b.priority];
+    });
+
+    filtered.forEach(t => {
+      const li = document.createElement('li');
+      li.className = 'item' + (t.done ? ' done' : '');
+
+      const cb = document.createElement('div');
+      cb.className = 'checkbox' + (t.done ? ' checked' : '');
+      cb.textContent = '✓';
+      cb.addEventListener('click', () => toggle(t.id));
+
+      const content = document.createElement('div');
+      content.className = 'content';
+
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = t.text;
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const tagClass = t.priority === 'high' ? 'tag-high' : t.priority === 'low' ? 'tag-low' : 'tag-mid';
+      const tagName = t.priority === 'high' ? '高' : t.priority === 'low' ? '低' : '中';
+      meta.innerHTML = '<span class="tag ' + tagClass + '">' + tagName + '</span>' +
+        (t.time ? '创建于 ' + t.time : '');
+
+      content.appendChild(title);
+      content.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'icon-btn del';
+      delBtn.textContent = '🗑';
+      delBtn.title = '删除';
+      delBtn.addEventListener('click', () => remove(t.id));
+      actions.appendChild(delBtn);
+
+      li.appendChild(cb);
+      li.appendChild(content);
+      li.appendChild(actions);
+      list.appendChild(li);
+    });
+  }
+
+  function addTodo() {
+    const text = todoInput.value.trim();
+    if (!text) { todoInput.focus(); return; }
+    const items = load(currentDate);
+    const now = new Date();
+    const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    items.push({
+      id: Date.now() + '' + Math.random().toString(36).slice(2, 6),
+      text: text,
+      done: false,
+      priority: prioritySel.value,
+      time: timeStr
+    });
+    save(currentDate, items);
+    todoInput.value = '';
+    todoInput.focus();
+    render();
+  }
+
+  function toggle(id) {
+    const items = load(currentDate);
+    const t = items.find(x => x.id === id);
+    if (t) {
+      t.done = !t.done;
+      save(currentDate, items);
+      render();
+    }
+  }
+
+  function remove(id) {
+    let items = load(currentDate);
+    items = items.filter(x => x.id !== id);
+    save(currentDate, items);
+    render();
+  }
+
+  function clearCompleted() {
+    let items = load(currentDate);
+    items = items.filter(x => !x.done);
+    save(currentDate, items);
+    render();
+  }
+
+  // 事件
+  addBtn.addEventListener('click', addTodo);
+  todoInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addTodo();
+  });
+
+  document.querySelectorAll('.filter').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.filter').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      filter = btn.dataset.filter;
+      render();
+    });
+  });
+
+  clearDone.addEventListener('click', clearCompleted);
+
+  prevDay.addEventListener('click', () => {
+    // 回到今天，或打开历史查看（简化：回到今天）
+    currentDate = todayKey();
+    prevDay.textContent = '← 查看历史';
+    render();
+  });
+
+  // 初始化
+  render();
+})();
+</script>
+</body>
+</html>
