@@ -115,6 +115,48 @@ def is_startup_enabled():
         return False
 
 
+# ---------- 单实例（命名互斥体 + 命名事件唤起） ----------
+MUTEX_NAME = 'TodoWidget_SingleInstance_Mutex'
+EVENT_NAME = 'TodoWidget_WakeEvent'
+ERROR_ALREADY_EXISTS = 183
+
+
+def acquire_single_instance():
+    """尝试获取单实例锁。返回 (是否首个实例, 唤起事件句柄或 None)。"""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.GetLastError.restype = wintypes.DWORD
+        mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+        already = kernel32.GetLastError() == ERROR_ALREADY_EXISTS
+        if already:
+            return False, None
+        kernel32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.CreateEventW.restype = wintypes.HANDLE
+        wake = kernel32.CreateEventW(None, True, False, EVENT_NAME)  # 手动重置，初始未触发
+        return True, wake
+    except Exception:
+        return True, None
+
+
+def wake_existing_instance():
+    """唤起已运行的实例。"""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.OpenEventW.restype = wintypes.HANDLE
+        kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+        kernel32.SetEvent.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        ev = kernel32.OpenEventW(0x0002, False, EVENT_NAME)  # EVENT_MODIFY_STATE
+        if ev:
+            kernel32.SetEvent(ev)
+            kernel32.CloseHandle(ev)
+    except Exception:
+        pass
+
+
 def apply_rounded(window, radius=18):
     """给无边框窗口设置圆角（Windows GDI 区域）。"""
     try:
@@ -1013,8 +1055,24 @@ class HistoryWindow(tk.Toplevel):
                                 command=lambda: self._switch('overview'))
         self.ov_btn.pack(side='left', padx=6, ipadx=14, ipady=6)
 
-        self.body = tk.Frame(self, bg=BG)
-        self.body.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        # 滚动容器
+        wrap = tk.Frame(self, bg=BG)
+        wrap.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        self.canvas = tk.Canvas(wrap, bg=BG, highlightthickness=0, bd=0)
+        self.sb = tk.Scrollbar(wrap, orient='vertical', command=self.canvas.yview, width=8)
+        self.body = tk.Frame(self.canvas, bg=BG)
+        self.body.bind('<Configure>',
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.body, anchor='nw')
+        self.canvas.configure(yscrollcommand=self.sb.set)
+        self.canvas.pack(side='left', fill='both', expand=True)
+        self.sb.pack(side='right', fill='y')
+        self.bind('<MouseWheel>', self._scroll)
+        self.canvas.bind('<Configure>',
+            lambda e: self.canvas.itemconfigure(self.canvas_window, width=e.width))
+
+    def _scroll(self, event):
+        self.canvas.yview_scroll(int(-event.delta / 120), 'units')
 
     def _switch(self, tab):
         self.tab = tab
@@ -1050,7 +1108,7 @@ class HistoryWindow(tk.Toplevel):
             .pack(side='left')
 
         box = tk.Frame(self.body, bg=CARD)
-        box.pack(fill='both', expand=True)
+        box.pack(fill='x')
 
         records = [r for r in data['records'] if r['date'] == self.sel_date]
         if not records:
@@ -1075,7 +1133,7 @@ class HistoryWindow(tk.Toplevel):
 
     def _render_overview(self, data):
         box = tk.Frame(self.body, bg=CARD)
-        box.pack(fill='both', expand=True)
+        box.pack(fill='x')
         tasks = data['tasks']
         if not tasks:
             tk.Label(box, text='还没有待办项目', bg=CARD, fg=SUB, font=FONT_SMALL).pack(pady=30)
@@ -1154,8 +1212,7 @@ class TaskManagerWindow(tk.Toplevel):
         self.canvas.configure(yscrollcommand=self.sb.set)
         self.canvas.pack(side='left', fill='both', expand=True)
         self.sb.pack(side='right', fill='y')
-        self.canvas.bind('<Enter>', lambda e: self.bind_all('<MouseWheel>', self._scroll))
-        self.canvas.bind('<Leave>', lambda e: self.unbind_all('<MouseWheel>'))
+        self.bind('<MouseWheel>', self._scroll)
         self.canvas.bind('<Configure>',
             lambda e: self.canvas.itemconfigure(self.canvas_window, width=e.width))
 
@@ -1473,8 +1530,7 @@ class TodoWidget:
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
         self.canvas.pack(side='left', fill='both', expand=True)
         self.scrollbar.pack(side='right', fill='y')
-        self.canvas.bind('<Enter>', lambda e: self.root.bind_all('<MouseWheel>', self._scroll))
-        self.canvas.bind('<Leave>', lambda e: self.root.unbind_all('<MouseWheel>'))
+        self.root.bind('<MouseWheel>', self._scroll)
         self.canvas.bind('<Configure>',
             lambda e: self.canvas.itemconfigure(self.canvas_window, width=e.width))
 
@@ -1559,6 +1615,37 @@ class TodoWidget:
             refresh_todo_icon()
         finally:
             self.root.after(60000, self._icon_refresh_loop)
+
+    # ---------- 单实例唤起 ----------
+    def set_wake_event(self, handle):
+        self._wake_handle = handle
+        self.root.after(500, self._wake_loop)
+
+    def _wake_loop(self):
+        try:
+            h = getattr(self, '_wake_handle', None)
+            if h:
+                kernel32 = ctypes.windll.kernel32
+                kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+                kernel32.WaitForSingleObject.restype = wintypes.DWORD
+                kernel32.ResetEvent.argtypes = [wintypes.HANDLE]
+                if kernel32.WaitForSingleObject(h, 0) == 0:  # WAIT_OBJECT_0
+                    kernel32.ResetEvent(h)
+                    self.wake_up()
+        finally:
+            self.root.after(500, self._wake_loop)
+
+    def wake_up(self):
+        """唤起窗口（从托盘/贴边/全屏隐藏状态恢复）"""
+        if self.fs_hidden:
+            self.fs_hidden = False
+            if self.fs_pos:
+                self.root.geometry('+%d+%d' % self.fs_pos)
+        if self.hidden:
+            self._show()
+        self.root.deiconify()
+        self.root.lift()
+        self._idle_since = datetime.datetime.now()
 
     # ---------- 打卡 ----------
     def _is_weekly_once(self, task):
@@ -1746,7 +1833,15 @@ class TodoWidget:
 
 
 def main():
-    TodoWidget().root.mainloop()
+    # 单实例：已有实例则唤起后退出
+    is_first, wake_handle = acquire_single_instance()
+    if not is_first:
+        wake_existing_instance()
+        return
+    w = TodoWidget()
+    if wake_handle:
+        w.set_wake_event(wake_handle)
+    w.root.mainloop()
 
 
 if __name__ == '__main__':
