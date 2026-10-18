@@ -698,7 +698,7 @@ class CheckinDialog(tk.Toplevel):
         self.configure(bg=CARD)
         self.resizable(False, False)
 
-        w, h = 320, 160
+        w, h = 320, 180
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
         self.geometry('%dx%d+%d+%d' % (w, h, (sw - w) // 2, (sh - h) // 2 - 60))
@@ -708,22 +708,22 @@ class CheckinDialog(tk.Toplevel):
         tk.Label(self, text=task['text'], bg=CARD, fg=TEXT, font=FONT_TITLE, wraplength=280,
                  justify='left').pack(anchor='w', padx=16, pady=(14, 2))
         tk.Label(self, text=prompt, bg=CARD, fg=ACCENT, font=FONT_SMALL)\
-            .pack(anchor='w', padx=16, pady=(0, 6))
+            .pack(anchor='w', padx=16, pady=(0, 8))
 
         self.entry = tk.Entry(self, font=FONT_TEXT, relief='flat', bg='#f2f4fa', fg=TEXT,
                               insertbackground=TEXT)
-        self.entry.pack(fill='x', padx=16, ipady=6)
+        self.entry.pack(fill='x', padx=16, ipady=8)
         self.entry.focus_set()
         self.entry.bind('<Return>', lambda e: self._ok())
 
         bar = tk.Frame(self, bg=CARD)
-        bar.pack(fill='x', padx=16, pady=12)
-        tk.Button(bar, text='确定打卡', bg=ACCENT, fg='white', bd=0, font=FONT_SMALL,
+        bar.pack(fill='x', padx=16, pady=14)
+        tk.Button(bar, text='确定打卡', bg=ACCENT, fg='white', bd=0, font=FONT_TEXT,
                   activebackground=ACCENT2, activeforeground='white', cursor='hand2',
-                  command=self._ok).pack(side='right', ipadx=12, ipady=4)
-        tk.Button(bar, text='取消', bg='#eef0f7', fg=TEXT, bd=0, font=FONT_SMALL,
+                  command=self._ok).pack(side='right', ipadx=16, ipady=6)
+        tk.Button(bar, text='取消', bg='#eef0f7', fg=TEXT, bd=0, font=FONT_TEXT,
                   activebackground=LINE, cursor='hand2', command=self.destroy)\
-            .pack(side='right', padx=6, ipadx=12, ipady=4)
+            .pack(side='right', padx=8, ipadx=16, ipady=6)
 
     def _ok(self):
         val = self.entry.get().strip()
@@ -950,23 +950,25 @@ class AddTaskDialog(tk.Toplevel):
             c.destroy()
         mode = self.weekly_mode_var.get()
         if mode == 'days':
-            tk.Label(self.weekly_body, text='点选每周要执行的星期（可多选，选中日每天都要打卡）', bg=CARD, fg=SUB,
-                     font=FONT_SMALL).pack(anchor='w', pady=(0, 2))
+            tk.Label(self.weekly_body, text='点选每周要执行的星期（可多选）', bg=CARD, fg=SUB,
+                     font=FONT_SMALL, wraplength=300).pack(anchor='w', pady=(0, 2))
             self.cal = CalendarWidget(self.weekly_body, mode='weekday', bg=CARD)
             self.cal.pack(anchor='w')
         elif mode == 'once':
+            tk.Label(self.weekly_body, text='一周内任意时间完成一次', bg=CARD, fg=SUB,
+                     font=FONT_SMALL).pack(anchor='w', pady=(4, 2))
             row = tk.Frame(self.weekly_body, bg=CARD)
-            row.pack(anchor='w', fill='x', pady=6)
-            tk.Label(row, text='一周内任意时间完成一次，每周', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
+            row.pack(anchor='w', fill='x', pady=2)
+            tk.Label(row, text='每周', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
             self.reset_menu = tk.OptionMenu(row, self.reset_weekday_var, *WEEK_FULL)
             self.reset_menu.config(bg=CARD, fg=TEXT, font=FONT_SMALL, bd=0, activebackground=BG,
                                    highlightthickness=0, cursor='hand2')
             self.reset_menu['menu'].config(font=FONT_SMALL)
             self.reset_menu.pack(side='left', padx=2)
-            tk.Label(row, text='重置（新一轮开始）', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
+            tk.Label(row, text='重置', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
         elif mode == 'range':
-            tk.Label(self.weekly_body, text='点选每周可完成的日期（星期，可多选）', bg=CARD, fg=SUB,
-                     font=FONT_SMALL).pack(anchor='w', pady=(0, 2))
+            tk.Label(self.weekly_body, text='点选每周可完成的日期（可多选）', bg=CARD, fg=SUB,
+                     font=FONT_SMALL, wraplength=300).pack(anchor='w', pady=(0, 2))
             self.cal = CalendarWidget(self.weekly_body, mode='weekday', bg=CARD)
             self.cal.pack(anchor='w')
             row = tk.Frame(self.weekly_body, bg=CARD)
@@ -977,7 +979,7 @@ class AddTaskDialog(tk.Toplevel):
                                    highlightthickness=0, cursor='hand2')
             self.reset_menu['menu'].config(font=FONT_SMALL)
             self.reset_menu.pack(side='left', padx=2)
-            tk.Label(row, text='重置（新一轮开始）', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
+            tk.Label(row, text='重置', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
 
     def _on_remind_toggle(self):
         state = 'normal' if self.remind_var.get() else 'disabled'
