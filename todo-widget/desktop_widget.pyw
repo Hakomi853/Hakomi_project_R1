@@ -743,10 +743,11 @@ class AddTaskDialog(tk.Toplevel):
         self.configure(bg=CARD)
         self.resizable(False, False)
 
-        w, h = 340, 520
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
-        self.geometry('%dx%d+%d+%d' % (w, h, (sw - w) // 2, (sh - h) // 2 - 40))
+        w = 360
+        h = min(sh - 120, 720)
+        self.geometry('%dx%d+%d+%d' % (w, h, (sw - w) // 2, (sh - h) // 2 - 30))
         self.transient(master)
 
         self.type_var = tk.StringVar(value='daily')
@@ -760,22 +761,48 @@ class AddTaskDialog(tk.Toplevel):
             self._prefill(edit_task)
 
     def _label(self, text):
-        tk.Label(self, text=text, bg=CARD, fg=SUB, font=FONT_SMALL, anchor='w')\
+        tk.Label(self.content, text=text, bg=CARD, fg=SUB, font=FONT_SMALL, anchor='w')\
             .pack(fill='x', padx=16, pady=(10, 2))
 
     def _build(self):
-        tk.Label(self, text='编辑待办' if self.edit_task else '新增待办', bg=CARD, fg=TEXT, font=FONT_TITLE)\
+        # 底部按钮栏（固定，不滚动）
+        bar = tk.Frame(self, bg=CARD)
+        bar.pack(side='bottom', fill='x', padx=16, pady=12)
+        tk.Button(bar, text='保存', bg=ACCENT, fg='white', bd=0, font=FONT_TEXT,
+                  activebackground=ACCENT2, activeforeground='white', cursor='hand2',
+                  command=self._save).pack(side='right', ipadx=16, ipady=5)
+        tk.Button(bar, text='取消', bg='#eef0f7', fg=TEXT, bd=0, font=FONT_TEXT,
+                  activebackground=LINE, cursor='hand2', command=self.destroy)\
+            .pack(side='right', padx=6, ipadx=16, ipady=5)
+
+        # 滚动容器
+        wrap = tk.Frame(self, bg=CARD)
+        wrap.pack(side='top', fill='both', expand=True)
+        self.canvas = tk.Canvas(wrap, bg=CARD, highlightthickness=0, bd=0)
+        self.sb = tk.Scrollbar(wrap, orient='vertical', command=self.canvas.yview, width=8)
+        self.content = tk.Frame(self.canvas, bg=CARD)
+        self.content.bind('<Configure>',
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.content, anchor='nw')
+        self.canvas.configure(yscrollcommand=self.sb.set)
+        self.canvas.pack(side='left', fill='both', expand=True)
+        self.sb.pack(side='right', fill='y')
+        self.bind('<MouseWheel>', self._scroll)
+        self.canvas.bind('<Configure>',
+            lambda e: self.canvas.itemconfigure(self.canvas_window, width=e.width))
+
+        tk.Label(self.content, text='编辑待办' if self.edit_task else '新增待办', bg=CARD, fg=TEXT, font=FONT_TITLE)\
             .pack(anchor='w', padx=16, pady=(14, 4))
 
         # 名称
         self._label('任务名称')
-        self.name_entry = tk.Entry(self, font=FONT_TEXT, relief='flat', bg='#f2f4fa', fg=TEXT,
+        self.name_entry = tk.Entry(self.content, font=FONT_TEXT, relief='flat', bg='#f2f4fa', fg=TEXT,
                                    insertbackground=TEXT)
         self.name_entry.pack(fill='x', padx=16, ipady=6)
 
         # 类型
         self._label('任务类型')
-        type_frame = tk.Frame(self, bg=CARD)
+        type_frame = tk.Frame(self.content, bg=CARD)
         type_frame.pack(fill='x', padx=16)
         types = [('daily', '每日'), ('once', '一次性'), ('weekly', '每周'), ('custom', '自定义周期')]
         for key, name in types:
@@ -786,18 +813,18 @@ class AddTaskDialog(tk.Toplevel):
 
         # 日期区域
         self._label('执行日期')
-        self.date_area = tk.Frame(self, bg=CARD)
+        self.date_area = tk.Frame(self.content, bg=CARD)
         self.date_area.pack(fill='x', padx=16)
         self._on_type_change()
 
         # 提醒
         self._label('每日提醒时间')
-        rem_frame = tk.Frame(self, bg=CARD)
+        rem_frame = tk.Frame(self.content, bg=CARD)
         rem_frame.pack(fill='x', padx=16)
         tk.Checkbutton(rem_frame, text='开启提醒', variable=self.remind_var, bg=CARD, fg=TEXT,
                        font=FONT_SMALL, activebackground=CARD, selectcolor=CARD,
                        command=self._on_remind_toggle).pack(side='left')
-        self.remind_box = tk.Frame(self, bg=CARD)
+        self.remind_box = tk.Frame(self.content, bg=CARD)
         self.remind_box.pack(fill='x', padx=16)
         self.hour_spin = tk.Spinbox(self.remind_box, from_=0, to=23, width=4, font=FONT_SMALL,
                                     justify='center', bd=0, bg='#f2f4fa', fg=TEXT)
@@ -813,7 +840,7 @@ class AddTaskDialog(tk.Toplevel):
 
         # 打卡方式
         self._label('打卡方式')
-        check_frame = tk.Frame(self, bg=CARD)
+        check_frame = tk.Frame(self.content, bg=CARD)
         check_frame.pack(fill='x', padx=16)
         tk.Radiobutton(check_frame, text='一次性打钩', value='checkbox', variable=self.check_var,
                        bg=CARD, fg=TEXT, font=FONT_SMALL, activebackground=CARD,
@@ -824,24 +851,17 @@ class AddTaskDialog(tk.Toplevel):
                        activeforeground=ACCENT, selectcolor=CARD, command=self._on_check_change)\
             .pack(side='left')
 
-        self.prompt_label = tk.Label(self, text='输入提示词（如：输入完成时间：）', bg=CARD, fg=SUB,
+        self.prompt_label = tk.Label(self.content, text='输入提示词（如：输入完成时间：）', bg=CARD, fg=SUB,
                                      font=FONT_SMALL, anchor='w')
         self.prompt_label.pack(fill='x', padx=16, pady=(8, 0))
-        self.prompt_entry = tk.Entry(self, font=FONT_TEXT, relief='flat', bg='#f2f4fa', fg=TEXT,
+        self.prompt_entry = tk.Entry(self.content, font=FONT_TEXT, relief='flat', bg='#f2f4fa', fg=TEXT,
                                      insertbackground=TEXT)
         self.prompt_entry.pack(fill='x', padx=16, ipady=6)
         self.prompt_entry.insert(0, '输入完成时间：')
         self._on_check_change()
 
-        # 按钮
-        bar = tk.Frame(self, bg=CARD)
-        bar.pack(fill='x', padx=16, pady=14)
-        tk.Button(bar, text='保存', bg=ACCENT, fg='white', bd=0, font=FONT_TEXT,
-                  activebackground=ACCENT2, activeforeground='white', cursor='hand2',
-                  command=self._save).pack(side='right', ipadx=16, ipady=5)
-        tk.Button(bar, text='取消', bg='#eef0f7', fg=TEXT, bd=0, font=FONT_TEXT,
-                  activebackground=LINE, cursor='hand2', command=self.destroy)\
-            .pack(side='right', padx=6, ipadx=16, ipady=5)
+    def _scroll(self, event):
+        self.canvas.yview_scroll(int(-event.delta / 120), 'units')
 
     def _prefill(self, t):
         self.name_entry.insert(0, t.get('text', ''))
@@ -925,9 +945,6 @@ class AddTaskDialog(tk.Toplevel):
             self.interval_spin.pack(side='left', padx=4)
             tk.Label(row, text='天一次', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
 
-        # 动态调整窗口高度
-        self.after(50, self._autosize)
-
     def _on_weekly_mode_change(self):
         for c in self.weekly_body.winfo_children():
             c.destroy()
@@ -961,11 +978,6 @@ class AddTaskDialog(tk.Toplevel):
             self.reset_menu['menu'].config(font=FONT_SMALL)
             self.reset_menu.pack(side='left', padx=2)
             tk.Label(row, text='重置（新一轮开始）', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
-        self.after(50, self._autosize)
-
-    def _autosize(self):
-        self.update_idletasks()
-        self.geometry('340x%d' % max(560, min(760, self.winfo_reqheight())))
 
     def _on_remind_toggle(self):
         state = 'normal' if self.remind_var.get() else 'disabled'
