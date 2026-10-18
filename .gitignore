@@ -23,6 +23,11 @@ build/
 *.pem
 secrets.*
 
+# ===== 电池脚本的运行时状态（每次运行都会变，不入库）=====
+conservation-paused.flag
+conservation-button-msg.txt
+conservation-mode-log.txt
+
 # ===== 日志 / 临时文件 / 系统垃圾 =====
 *.log
 tmp/
