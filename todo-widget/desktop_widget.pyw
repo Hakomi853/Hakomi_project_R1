@@ -514,6 +514,15 @@ def find_task(tasks, task_id):
     return None
 
 
+def task_remind_times(task):
+    """返回任务的提醒时间列表 ['HH:MM', ...]。兼容旧版单值 remind_time。"""
+    times = task.get('remind_times')
+    if isinstance(times, list):
+        return [x for x in times if x]
+    t = task.get('remind_time')
+    return [t] if t else []
+
+
 # ---------- 提示音 ----------
 def ensure_prompt_wav():
     if os.path.exists(PROMPT_WAV):
@@ -649,7 +658,7 @@ class CalendarWidget(tk.Frame):
 
 # ================= 提醒弹窗 =================
 class ReminderPopup(tk.Toplevel):
-    def __init__(self, task, on_checkin, on_later):
+    def __init__(self, task, on_checkin, on_later, remind_at=None):
         super().__init__()
         self.task = task
         self.overrideredirect(True)
@@ -665,7 +674,7 @@ class ReminderPopup(tk.Toplevel):
             .pack(anchor='w', padx=16, pady=(14, 2))
         tk.Label(self, text=task['text'], bg=CARD, fg=TEXT, font=FONT_TEXT, wraplength=268,
                  justify='left').pack(anchor='w', padx=16)
-        sub = '提醒时间 %s' % task.get('remind_time', '')
+        sub = '提醒时间 %s' % (remind_at or (task_remind_times(task)[0] if task_remind_times(task) else ''))
         tk.Label(self, text=sub, bg=CARD, fg=SUB, font=FONT_SUB)\
             .pack(anchor='w', padx=16, pady=(2, 8))
 
@@ -818,25 +827,25 @@ class AddTaskDialog(tk.Toplevel):
         self._on_type_change()
 
         # 提醒
-        self._label('每日提醒时间')
+        self._label('提醒时间')
         rem_frame = tk.Frame(self.content, bg=CARD)
         rem_frame.pack(fill='x', padx=16)
         tk.Checkbutton(rem_frame, text='开启提醒', variable=self.remind_var, bg=CARD, fg=TEXT,
                        font=FONT_SMALL, activebackground=CARD, selectcolor=CARD,
                        command=self._on_remind_toggle).pack(side='left')
+
         self.remind_box = tk.Frame(self.content, bg=CARD)
         self.remind_box.pack(fill='x', padx=16)
-        self.hour_spin = tk.Spinbox(self.remind_box, from_=0, to=23, width=4, font=FONT_SMALL,
-                                    justify='center', bd=0, bg='#f2f4fa', fg=TEXT)
-        self.min_spin = tk.Spinbox(self.remind_box, from_=0, to=59, width=4, font=FONT_SMALL,
-                                   justify='center', bd=0, bg='#f2f4fa', fg=TEXT)
-        self.hour_spin.delete(0, 'end')
-        self.hour_spin.insert(0, '9')
-        self.min_spin.delete(0, 'end')
-        self.min_spin.insert(0, '00')
-        self.hour_spin.pack(side='left')
-        tk.Label(self.remind_box, text=':', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
-        self.min_spin.pack(side='left')
+        self.remind_rows = []          # [(hour_spin, min_spin, row_frame), ...]
+        self._add_remind_row('9', '00')
+
+        # 加号：添加多个提醒时间
+        add_btn = tk.Label(self.content, text='＋ 添加提醒时间', bg=CARD, fg=ACCENT, font=FONT_SUB,
+                           cursor='hand2', anchor='w')
+        add_btn.pack(fill='x', padx=16, pady=(2, 0))
+        add_btn.bind('<Button-1>', lambda e: self._add_remind_row())
+        add_btn.bind('<Enter>', lambda e: add_btn.config(fg=ACCENT2))
+        add_btn.bind('<Leave>', lambda e: add_btn.config(fg=ACCENT))
 
         # 打卡方式
         self._label('打卡方式')
@@ -893,11 +902,17 @@ class AddTaskDialog(tk.Toplevel):
 
         if t.get('remind_enabled'):
             self.remind_var.set(True)
-            hm = (t.get('remind_time') or '09:00').split(':')
-            self.hour_spin.delete(0, 'end')
-            self.hour_spin.insert(0, hm[0])
-            self.min_spin.delete(0, 'end')
-            self.min_spin.insert(0, hm[1])
+            times = task_remind_times(t) or ['09:00']
+            # 清空默认行，按实际时间重建
+            for h, m, r in self.remind_rows:
+                r.destroy()
+            self.remind_rows = []
+            for tt in times:
+                if ':' in tt:
+                    hh, mm = tt.split(':', 1)
+                else:
+                    hh, mm = '9', '00'
+                self._add_remind_row(hh, mm)
             self._on_remind_toggle()
 
         self.check_var.set(t.get('check_type', 'checkbox'))
@@ -981,10 +996,37 @@ class AddTaskDialog(tk.Toplevel):
             self.reset_menu.pack(side='left', padx=2)
             tk.Label(row, text='重置', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
 
+    def _add_remind_row(self, hh='9', mm='00'):
+        """添加一行提醒时间（时:分 + 删除按钮）。"""
+        row = tk.Frame(self.remind_box, bg=CARD)
+        row.pack(fill='x', pady=2)
+        hour = tk.Spinbox(row, from_=0, to=23, width=3, font=FONT_SMALL, justify='center',
+                          bd=0, bg='#f2f4fa', fg=TEXT)
+        minute = tk.Spinbox(row, from_=0, to=59, width=3, font=FONT_SMALL, justify='center',
+                            bd=0, bg='#f2f4fa', fg=TEXT)
+        hour.delete(0, 'end'); hour.insert(0, hh)
+        minute.delete(0, 'end'); minute.insert(0, mm)
+        hour.pack(side='left')
+        tk.Label(row, text=' : ', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
+        minute.pack(side='left')
+        rm = tk.Label(row, text='✕', bg=CARD, fg=SUB, font=FONT_SMALL, cursor='hand2')
+        rm.pack(side='left', padx=(8, 0))
+        rm.bind('<Button-1>', lambda e, row=row: self._remove_remind_row(row))
+        rm.bind('<Enter>', lambda e: rm.config(fg=DANGER))
+        rm.bind('<Leave>', lambda e: rm.config(fg=SUB))
+        self.remind_rows.append((hour, minute, row))
+
+    def _remove_remind_row(self, row):
+        if len(self.remind_rows) <= 1:
+            return
+        row.destroy()
+        self.remind_rows = [(h, m, r) for (h, m, r) in self.remind_rows if r is not row]
+
     def _on_remind_toggle(self):
         state = 'normal' if self.remind_var.get() else 'disabled'
-        self.hour_spin.config(state=state)
-        self.min_spin.config(state=state)
+        for h, m, r in self.remind_rows:
+            h.config(state=state)
+            m.config(state=state)
 
     def _on_check_change(self):
         if self.check_var.get() == 'text':
@@ -1013,16 +1055,21 @@ class AddTaskDialog(tk.Toplevel):
             'check_prompt': self.prompt_entry.get().strip(),
             'remind_enabled': self.remind_var.get(),
             'remind_time': None,
+            'remind_times': [],
             'active': True,
             'created_at': today_iso(),
         }
         if self.remind_var.get():
-            try:
-                hh = int(self.hour_spin.get())
-                mm = int(self.min_spin.get())
-                task['remind_time'] = '%02d:%02d' % (hh % 24, mm % 60)
-            except Exception:
-                task['remind_time'] = '09:00'
+            times = []
+            for h, m, r in self.remind_rows:
+                try:
+                    hh = int(h.get())
+                    mm = int(m.get())
+                    times.append('%02d:%02d' % (hh % 24, mm % 60))
+                except Exception:
+                    continue
+            task['remind_times'] = times
+            task['remind_time'] = times[0] if times else '09:00'
         if t == 'once':
             task['date'] = self.cal.selected_date
         elif t == 'weekly':
@@ -1292,7 +1339,8 @@ class TaskManagerWindow(tk.Toplevel):
         elif t['type'] == 'custom':
             sub_parts.append('每 %d 天 · 自 %s' % (t.get('interval_days', 1), t.get('start_date', '')))
         if t.get('remind_enabled'):
-            sub_parts.append('⏰ ' + t.get('remind_time', ''))
+            times = task_remind_times(t)
+            sub_parts.append('⏰ ' + ('、'.join(times) if times else ''))
         sub_parts.append('打钩' if t['check_type'] == 'checkbox' else '自定义输入')
         sub_parts.append('累计 %d 次' % len(recs))
         tk.Label(card, text='  '.join(sub_parts), bg=CARD, fg=SUB, font=FONT_SUB, anchor='w',
@@ -1351,9 +1399,11 @@ class TaskManagerWindow(tk.Toplevel):
 
 # ================= 主挂件 =================
 class TodoWidget:
-    IDLE_MS = 2500          # 闲置多久后隐藏（毫秒）
+    IDLE_MS = 500           # 闲置多久后隐藏（毫秒）
     EDGE_PX = 3             # 隐藏后露出的边宽度
     EDGE_TRIGGER = 8        # 鼠标距离边缘多少像素触发唤出
+    SLIDE_STEP = 12         # 滑动动画每步移动像素（匀速）
+    SLIDE_INTERVAL = 8      # 滑动动画每步间隔（毫秒）
 
     def __init__(self):
         enable_dpi_awareness()
@@ -1361,7 +1411,7 @@ class TodoWidget:
         self.root = tk.Tk()
         self.root.title('每日待办')
         self.root.overrideredirect(True)
-        self.root.attributes('-topmost', True)
+        self.root.attributes('-topmost', False)   # 不再置顶，改为叠在前台窗口之下
         self.root.configure(bg=BG)
 
         self.collapsed = False
@@ -1375,11 +1425,17 @@ class TodoWidget:
         self.tray = None           # 系统托盘图标（首次关闭时创建）
         self._quitting = False
 
+        self._sliding = False       # 贴边滑动动画进行中
+        self._slide_after = None
+        self._dragging = False      # 拖动窗口进行中
+        self._done_collapsed = {}   # 各类型「折叠已完成」状态 {group_title: bool}
+
         self.reminded = set()   # 已提醒 (task_id, date, time)
 
         self._set_pos()
         self._build_header()
         self._build_body()
+        self.root.bind('<ButtonRelease-1>', self._drag_end)
         self.refresh()
 
         # 应用圆角（等窗口尺寸确定后）
@@ -1389,6 +1445,7 @@ class TodoWidget:
         self.root.after(200, self._idle_loop)
         self.root.after(15000, self._remind_loop)
         self.root.after(200, self._fs_loop)
+        self.root.after(300, self._zorder_loop)
         self.root.after(60000, self._icon_refresh_loop)   # 跨天自动刷新图标
 
         # 默认开启开机自启（首次运行即注册）
@@ -1411,7 +1468,7 @@ class TodoWidget:
             self.root.after(200, self._idle_loop)
 
     def _check_idle(self):
-        if self.collapsed or self.fs_hidden:
+        if self.collapsed or self.fs_hidden or self._sliding:
             return
         x = self.root.winfo_x()
         y = self.root.winfo_y()
@@ -1443,10 +1500,11 @@ class TodoWidget:
             self._hide()
 
     def _hide(self):
+        if self._sliding or self.hidden:
+            return
         x = self.root.winfo_x()
         y = self.root.winfo_y()
         w = self.root.winfo_width()
-        h = self.root.winfo_height()
         sw = self.root.winfo_screenwidth()
 
         # 判断贴哪边（就近隐藏）
@@ -1461,25 +1519,65 @@ class TodoWidget:
 
         self._hidden_pos = (x, y)
         if self.edge == 'right':
-            new_x = sw - self.EDGE_PX
+            target_x = sw - self.EDGE_PX
         else:
-            new_x = -(w - self.EDGE_PX)
-        self.root.geometry('%dx%d+%d+%d' % (w, h, new_x, y))
+            target_x = -(w - self.EDGE_PX)
+        self._sliding = True
+        self._slide_to(target_x, on_done=self._on_hide_done)
+
+    def _on_hide_done(self):
+        self._sliding = False
         self.hidden = True
 
     def _show(self):
-        if not self.hidden:
+        if not self.hidden or self._sliding:
             return
         x, y = self._hidden_pos
         sw = self.root.winfo_screenwidth()
         w = self.root.winfo_width()
         if self.edge == 'right':
-            x = sw - w - 24
+            target_x = sw - w - 24
         else:
-            x = 24
-        self.root.geometry('%dx%d+%d+%d' % (w, self.root.winfo_height(), x, y))
+            target_x = 24
         self.hidden = False
+        self._sliding = True
+        self._slide_to(target_x, on_done=self._on_show_done)
+
+    def _on_show_done(self):
+        self._sliding = False
         self._idle_since = datetime.datetime.now()
+
+    # ---------- 匀速滑动动画 ----------
+    def _slide_to(self, target_x, on_done=None):
+        self._cancel_slide()
+        self._slide_target = target_x
+        self._slide_on_done = on_done
+        self._do_slide_step()
+
+    def _cancel_slide(self):
+        if getattr(self, '_slide_after', None):
+            try:
+                self.root.after_cancel(self._slide_after)
+            except Exception:
+                pass
+            self._slide_after = None
+
+    def _do_slide_step(self):
+        x = self.root.winfo_x()
+        target = self._slide_target
+        if x == target:
+            cb = self._slide_on_done
+            self._slide_on_done = None
+            if cb:
+                cb()
+            return
+        step = self.SLIDE_STEP
+        if abs(target - x) <= step:
+            new_x = target
+        else:
+            new_x = x + step if target > x else x - step
+        self.root.geometry('+%d+%d' % (new_x, self.root.winfo_y()))
+        self._slide_after = self.root.after(self.SLIDE_INTERVAL, self._do_slide_step)
 
     # ---------- 全屏监测（轮询前台窗口矩形，其他应用全屏时完全隐藏，不留边） ----------
     def _fs_loop(self):
@@ -1503,6 +1601,42 @@ class TodoWidget:
                     self.root.geometry('+%d+%d' % self.fs_pos)
                 self._idle_since = datetime.datetime.now()
 
+    # ---------- 图层：叠在最新活动窗口之下，而非置顶 ----------
+    def _zorder_loop(self):
+        try:
+            self._keep_below_foreground()
+        finally:
+            self.root.after(300, self._zorder_loop)
+
+    def _keep_below_foreground(self):
+        if self._quitting or self.hidden or self.fs_hidden or self._sliding or self._dragging:
+            return
+        if not self.root.winfo_viewable():
+            return
+        try:
+            user32 = ctypes.windll.user32
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                            ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+            user32.SetWindowPos.restype = wintypes.BOOL
+
+            fg = user32.GetForegroundWindow()
+            me = self.root.winfo_id()
+            if not fg or fg == me:
+                return
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(fg, buf, 256)
+            if buf.value.lower() in ('progman', 'workerw', 'taskmgr'):
+                return   # 桌面或任务管理器，不调整
+
+            # 将自身插入前台窗口之下（不抢焦点、不改变大小位置）
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOACTIVATE = 0x0010
+            user32.SetWindowPos(me, fg, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        except Exception:
+            pass
+
     # ---------- 标题栏 ----------
     def _build_header(self):
         h = tk.Frame(self.root, bg=HEADER, height=self.header_h)
@@ -1510,11 +1644,13 @@ class TodoWidget:
         h.pack_propagate(False)
         h.bind('<Button-1>', self._drag_start)
         h.bind('<B1-Motion>', self._drag_move)
+        h.bind('<ButtonRelease-1>', self._drag_end)
 
         self.title_label = tk.Label(h, text='📋 今日待办', bg=HEADER, fg='white', font=FONT_TITLE)
         self.title_label.pack(side='left', padx=10)
         self.title_label.bind('<Button-1>', self._drag_start)
         self.title_label.bind('<B1-Motion>', self._drag_move)
+        self.title_label.bind('<ButtonRelease-1>', self._drag_end)
 
         self.collapse_btn = tk.Button(h, text='—', bg=HEADER, fg='white', bd=0, font=FONT_TEXT,
                                       activebackground=HEADER, activeforeground='white',
@@ -1563,12 +1699,17 @@ class TodoWidget:
 
     # ---------- 拖动 ----------
     def _drag_start(self, e):
+        self._dragging = True
+        self._cancel_slide()
         self._dx = e.x_root - self.root.winfo_x()
         self._dy = e.y_root - self.root.winfo_y()
 
     def _drag_move(self, e):
         self.root.geometry('+%d+%d' % (e.x_root - self._dx, e.y_root - self._dy))
         self._idle_since = datetime.datetime.now()
+
+    def _drag_end(self, e):
+        self._dragging = False
 
     # ---------- 折叠 ----------
     def _toggle_collapse(self):
@@ -1600,8 +1741,17 @@ class TodoWidget:
 
     def show_from_tray(self):
         self.root.deiconify()
-        self.root.lift()
+        self._flash_top()
         self._idle_since = datetime.datetime.now()
+
+    def _flash_top(self):
+        """临时置顶再取消，把窗口带到上层（随后由图层循环按需下调）。"""
+        try:
+            self.root.attributes('-topmost', True)
+            self.root.update_idletasks()
+            self.root.attributes('-topmost', False)
+        except Exception:
+            pass
 
     def quit_app(self):
         self._quitting = True
@@ -1655,7 +1805,7 @@ class TodoWidget:
         if self.hidden:
             self._show()
         self.root.deiconify()
-        self.root.lift()
+        self._flash_top()
         self._idle_since = datetime.datetime.now()
 
     # ---------- 打卡 ----------
@@ -1740,23 +1890,23 @@ class TodoWidget:
             self.root.after(15000, self._remind_loop)
 
     def _check_reminders(self):
-        now = datetime.datetime.now()
-        hm = now.strftime('%H:%M')
+        now_hm = datetime.datetime.now().strftime('%H:%M')
         data = load_all()
         today_tasks = tasks_for_date(data['tasks'], today())
         for t in today_tasks:
             if not t.get('remind_enabled'):
                 continue
-            if t.get('remind_time') != hm:
+            if is_done(t, data['records'], today()):   # 已完成不再提醒
                 continue
-            key = (t['id'], today_iso(), hm)
-            if key in self.reminded:
-                continue
-            if is_done(t, data['records'], today()):
-                continue
-            self.reminded.add(key)
-            play_sound()
-            ReminderPopup(t, lambda t=t: self.do_checkin(t), lambda: None)
+            for hm in task_remind_times(t):
+                if hm != now_hm:
+                    continue
+                key = (t['id'], today_iso(), hm)
+                if key in self.reminded:
+                    continue
+                self.reminded.add(key)
+                play_sound()
+                ReminderPopup(t, lambda t=t: self.do_checkin(t), lambda: None, remind_at=hm)
 
     # ---------- 渲染 ----------
     def refresh(self):
@@ -1802,8 +1952,33 @@ class TodoWidget:
         if total:
             c.create_rectangle(0, 0, 308 * done / total, 6, fill=ACCENT, outline='')
 
-        for t in group:
+        # 未完成靠上、已完成靠下（同一类型内生效）
+        undone = [t for t in group if not is_done(t, data['records'], today())]
+        done_tasks = [t for t in group if is_done(t, data['records'], today())]
+
+        for t in undone:
             self._render_task(t)
+
+        if done_tasks:
+            collapsed = self._done_collapsed.get(title, False)
+            if collapsed:
+                self._render_done_toggle(title, '▸ 展开 %d 项已完成' % len(done_tasks))
+            else:
+                for t in done_tasks:
+                    self._render_task(t)
+                self._render_done_toggle(title, '▾ 折叠已完成（%d）' % len(done_tasks))
+
+    def _render_done_toggle(self, title, text):
+        btn = tk.Label(self.list_frame, text=text, bg='#eef0f7', fg=SUB,
+                       font=FONT_SMALL, cursor='hand2', pady=5)
+        btn.pack(fill='x', padx=6, pady=(2, 4))
+        btn.bind('<Button-1>', lambda e: self._toggle_done(title))
+        btn.bind('<Enter>', lambda e: btn.config(fg=ACCENT))
+        btn.bind('<Leave>', lambda e: btn.config(fg=SUB))
+
+    def _toggle_done(self, title):
+        self._done_collapsed[title] = not self._done_collapsed.get(title, False)
+        self.refresh()
 
     def _render_task(self, t):
         data = load_all()
@@ -1857,7 +2032,8 @@ class TodoWidget:
                 wd = [WEEK_CN[i] for i in sorted(t.get('available_weekdays', []))]
                 sub_parts.append('限%s完成' % ('、'.join(wd) if wd else '未选'))
         if t.get('remind_enabled'):
-            sub_parts.append('⏰ ' + t.get('remind_time', ''))
+            times = task_remind_times(t)
+            sub_parts.append('⏰ ' + ('、'.join(times) if times else ''))
         if rec and rec.get('value'):
             sub_parts.append('打卡：' + rec['value'])
         tk.Label(col, text='  '.join(sub_parts), bg=CARD, fg=SUB, font=FONT_SUB, anchor='w',

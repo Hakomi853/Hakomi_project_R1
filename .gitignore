@@ -2,6 +2,7 @@
 # 无斜杠写法匹配任意层级，项目移到子文件夹后依旧生效
 todo_data.json
 .icon_date
+prompt.wav
 
 # ===== 依赖与虚拟环境 =====
 node_modules/
