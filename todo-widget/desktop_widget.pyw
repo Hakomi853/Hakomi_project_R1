@@ -904,7 +904,7 @@ class AddTaskDialog(tk.Toplevel):
             self.remind_var.set(True)
             times = task_remind_times(t) or ['09:00']
             # 清空默认行，按实际时间重建
-            for h, m, r in self.remind_rows:
+            for h, m, r, rm in self.remind_rows:
                 r.destroy()
             self.remind_rows = []
             for tt in times:
@@ -1010,21 +1010,32 @@ class AddTaskDialog(tk.Toplevel):
         tk.Label(row, text=' : ', bg=CARD, fg=TEXT, font=FONT_SMALL).pack(side='left')
         minute.pack(side='left')
         rm = tk.Label(row, text='✕', bg=CARD, fg=SUB, font=FONT_SMALL, cursor='hand2')
-        rm.pack(side='left', padx=(8, 0))
         rm.bind('<Button-1>', lambda e, row=row: self._remove_remind_row(row))
         rm.bind('<Enter>', lambda e: rm.config(fg=DANGER))
         rm.bind('<Leave>', lambda e: rm.config(fg=SUB))
-        self.remind_rows.append((hour, minute, row))
+        self.remind_rows.append((hour, minute, row, rm))
+        self._update_remind_remove()
 
     def _remove_remind_row(self, row):
         if len(self.remind_rows) <= 1:
             return
         row.destroy()
-        self.remind_rows = [(h, m, r) for (h, m, r) in self.remind_rows if r is not row]
+        self.remind_rows = [t for t in self.remind_rows if t[2] is not row]
+        self._update_remind_remove()
+
+    def _update_remind_remove(self):
+        """只有一个提醒时间时不显示删除叉号，多个时才显示。"""
+        show = len(self.remind_rows) > 1
+        for h, m, r, rm in self.remind_rows:
+            if show:
+                if not rm.winfo_ismapped():
+                    rm.pack(side='left', padx=(8, 0))
+            else:
+                rm.pack_forget()
 
     def _on_remind_toggle(self):
         state = 'normal' if self.remind_var.get() else 'disabled'
-        for h, m, r in self.remind_rows:
+        for h, m, r, rm in self.remind_rows:
             h.config(state=state)
             m.config(state=state)
 
@@ -1061,7 +1072,7 @@ class AddTaskDialog(tk.Toplevel):
         }
         if self.remind_var.get():
             times = []
-            for h, m, r in self.remind_rows:
+            for h, m, r, rm in self.remind_rows:
                 try:
                     hh = int(h.get())
                     mm = int(m.get())
@@ -1402,7 +1413,7 @@ class TodoWidget:
     IDLE_MS = 500           # 闲置多久后隐藏（毫秒）
     EDGE_PX = 3             # 隐藏后露出的边宽度
     EDGE_TRIGGER = 8        # 鼠标距离边缘多少像素触发唤出
-    SLIDE_STEP = 12         # 滑动动画每步移动像素（匀速）
+    SLIDE_STEP = 16         # 滑动动画每步移动像素（匀速）
     SLIDE_INTERVAL = 8      # 滑动动画每步间隔（毫秒）
 
     def __init__(self):
@@ -1489,6 +1500,13 @@ class TodoWidget:
 
         # 未隐藏：鼠标在窗口内则不计时
         inside = (x <= mx <= x + w) and (y <= my <= y + h)
+        # 贴边时把窗口与屏幕边缘之间的空隙也算作停留区，避免鼠标在边缘时窗口反复进出
+        gap = 40
+        if not inside:
+            if self.edge == 'right' and (sw - (x + w)) < gap:
+                inside = (x <= mx <= sw) and (y <= my <= y + h)
+            elif self.edge == 'left' and x < gap:
+                inside = (0 <= mx <= x + w) and (y <= my <= y + h)
         if inside:
             self._idle_since = datetime.datetime.now()
             return
@@ -1962,11 +1980,11 @@ class TodoWidget:
         if done_tasks:
             collapsed = self._done_collapsed.get(title, False)
             if collapsed:
-                self._render_done_toggle(title, '▸ 展开 %d 项已完成' % len(done_tasks))
+                self._render_done_toggle(title, '▾ 展开 %d 项已完成' % len(done_tasks))
             else:
                 for t in done_tasks:
                     self._render_task(t)
-                self._render_done_toggle(title, '▾ 折叠已完成（%d）' % len(done_tasks))
+                self._render_done_toggle(title, '▴ 折叠已完成（%d）' % len(done_tasks))
 
     def _render_done_toggle(self, title, text):
         btn = tk.Label(self.list_frame, text=text, bg='#eef0f7', fg=SUB,
