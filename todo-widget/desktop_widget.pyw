@@ -2299,9 +2299,10 @@ class TodoWidget:
     def _drag_scroll_by(self, frac):
         """按可视区高度的 frac 比例滚动（0.2 约等于缓慢滚动）。"""
         try:
-            total = self.canvas.winfo_reqheight()  # 内容总高度
             view_h = self.canvas.winfo_height()    # 可视高度
-            if total <= view_h:
+            # 内容总高度：优先取 list_frame 请求高度（scrollregion 的来源）
+            total = self.list_frame.winfo_reqheight()
+            if total <= 0 or total <= view_h:
                 return
             y0, y1 = self.canvas.yview()           # 当前可视比例 [0..1]
             step = (view_h / total) * frac
