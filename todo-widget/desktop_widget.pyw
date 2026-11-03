@@ -2321,7 +2321,7 @@ class TodoWidget:
         if self._autoscroll_dir == 0 or self._reorder_task is None:
             self._stop_autoscroll()
             return
-        self._drag_scroll_by(self._autoscroll_dir * 0.2)
+        self._drag_scroll_by(self._autoscroll_dir * 0.1)
         # 继续匀速滚动，直到停止或拖拽结束
         self._autoscroll_after = self.root.after(16, self._autoscroll_step)
 
