@@ -2247,19 +2247,26 @@ class TodoWidget:
         row = self._reorder_row
         # 被拖行跟随鼠标（相对 list_frame 居中），并钳制在本组上下边界内
         if row is not None:
-            raw_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
-            clamped_y = self._clamp_drag_y(raw_y, row)
-            row.place_configure(y=clamped_y)
-            # 触顶/触底挤压反馈：越界时略微压缩行高，回到范围内恢复
-            min_y, max_y = self._group_bounds(row.winfo_reqheight())
-            overflow = 0
-            if raw_y < min_y:
-                overflow = min_y - raw_y
-            elif raw_y > max_y:
-                overflow = raw_y - max_y
-            squeeze = min(14, overflow * 0.3)   # 最大压缩 14px，随越界量递增
             base_h = self._reorder_row_h
-            row.place_configure(height=max(base_h - 8, base_h - squeeze))
+            row_h = row.winfo_reqheight()
+            raw_y = e.y_root - self.list_frame.winfo_rooty() - row_h / 2
+            min_y, max_y = self._group_bounds(row_h)
+
+            squeeze = 0
+            if raw_y < min_y:
+                # 触顶：顶部贴住上边界，压缩高度（底部上移）
+                squeeze = min(14, (min_y - raw_y) * 0.3)
+                h = max(base_h - 8, base_h - squeeze)
+                row.place_configure(y=min_y, height=h)
+            elif raw_y > max_y:
+                # 触底：底部贴住下边界，压缩高度（顶部下移）
+                squeeze = min(14, (raw_y - max_y) * 0.3)
+                h = max(base_h - 8, base_h - squeeze)
+                y = max_y + row_h - h   # 保持底部不动，顶部下移
+                row.place_configure(y=y, height=h)
+            else:
+                # 正常范围：完整高度跟随鼠标
+                row.place_configure(y=self._clamp_drag_y(raw_y, row), height=base_h)
 
         # 判断空位是否应上/下移动
         self._update_spacer(e, task)
