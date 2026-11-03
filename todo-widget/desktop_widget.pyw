@@ -2035,11 +2035,11 @@ class TodoWidget:
                 for t in done_tasks:
                     self._render_task(t, parent=holder)
                 holder.update_idletasks()
-                holder.config(height=holder.winfo_reqheight())
+                holder.config(height=sum(c.winfo_reqheight() for c in holder.winfo_children()))
             self._done_holders[title] = holder
             # 折叠按钮始终在容器外，保证可见
-            self._render_done_toggle(title, ('▾ 展开 %d 项已完成' if collapsed else '▴ 折叠已完成（%d）') % len(done_tasks))
-            self._done_toggles[title] = self.list_frame.winfo_children()[-1]
+            self._done_toggles[title] = self._render_done_toggle(
+                title, ('▾ 展开 %d 项已完成' if collapsed else '▴ 折叠已完成（%d）') % len(done_tasks))
 
     def _render_done_toggle(self, title, text, holder=None):
         parent = holder if holder is not None else self.list_frame
@@ -2049,6 +2049,7 @@ class TodoWidget:
         btn.bind('<Button-1>', lambda e: self._toggle_done(title))
         btn.bind('<Enter>', lambda e: btn.config(fg=ACCENT))
         btn.bind('<Leave>', lambda e: btn.config(fg=SUB))
+        return btn
 
     def _toggle_done(self, title):
         self._done_collapsed[title] = not self._done_collapsed.get(title, True)
@@ -2083,7 +2084,8 @@ class TodoWidget:
             for t in done_tasks:
                 self._render_task(t, parent=holder)
             holder.update_idletasks()
-            target_h = holder.winfo_reqheight()
+            # 用子行实际高度求和，避免 pack_propagate(False) 下 reqheight 不准确
+            target_h = sum(c.winfo_reqheight() for c in holder.winfo_children())
 
         # 更新折叠按钮文字
         btn = self._done_toggles.get(title)
@@ -2257,16 +2259,18 @@ class TodoWidget:
 
     def _repack_group(self, ordered_ids):
         """按给定顺序重新 pack 这些行（不含正在拖拽的 place 行）。"""
-        # 先全部摘掉 pack
+        # 先全部摘掉（记录要 pack 的行），pack_forget 后 winfo_manager 会变空，不能依赖它判断
+        to_pack = []
         for oid in ordered_ids:
             w = self._row_widgets.get(oid)
-            if w is not None and w.winfo_manager() == 'pack':
+            if w is None:
+                continue
+            if w.winfo_manager() == 'pack':
                 w.pack_forget()
-        # 再按顺序 pack
-        for oid in ordered_ids:
-            w = self._row_widgets.get(oid)
-            if w is not None and w.winfo_manager() == 'pack':
-                w.pack(fill='x', padx=6, pady=3)
+                to_pack.append(w)
+        # 再按顺序重新 pack
+        for w in to_pack:
+            w.pack(fill='x', padx=6, pady=3)
 
     def _reorder_end(self, e, group_title):
         task = self._reorder_task
