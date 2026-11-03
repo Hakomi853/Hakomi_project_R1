@@ -1465,8 +1465,10 @@ class TodoWidget:
         self._done_collapsed = {}   # 各类型「折叠已完成」状态 {group_title: bool}
         self._reorder_task = None   # 正在拖拽排序的任务
         self._reorder_row = None    # 被拖拽的行 widget
-        self._reorder_line = None   # 插入指示线
+        self._reorder_spacer = None # 拖动时留下的占位空位
         self._reorder_moved = False
+        self._reorder_group_title = None
+        self._reorder_row_h = 46
         self._row_widgets = {}      # task_id -> 渲染的行 frame（拖动让位用）
         self._done_holders = {}     # 组标题 -> 已完成区容器 frame（展开折叠动画用）
         self._done_toggles = {}     # 组标题 -> 折叠按钮 widget
@@ -2188,18 +2190,19 @@ class TodoWidget:
         del_btn.bind('<Enter>', lambda e: del_btn.config(fg=DANGER))
         del_btn.bind('<Leave>', lambda e: del_btn.config(fg=SUB))
 
-    # ---------- 拖动排序（实时让位，仅展开态、未完成任务可拖） ----------
+    # ---------- 拖动排序（空位模式，仅展开态、未完成任务可拖） ----------
     def _reorder_start(self, e, task):
         self._reorder_task = task
         self._reorder_row = self._row_widgets.get(task['id'])
         self._reorder_y0 = e.y_root
         self._reorder_moved = False
-        self._reorder_group = self._group_tasks(task)
-        # 记录拖拽行原始 pack 参数，供恢复
+        self._reorder_group_title = _group_of(task)
+        # 记录被拖行原始尺寸，用于建立占位空位
         if self._reorder_row is not None:
-            self._reorder_row_pack = self._reorder_row.pack_info()
-        # 插入指示线
-        self._reorder_line = tk.Frame(self.list_frame, bg=ACCENT, height=2)
+            self._reorder_row_h = self._reorder_row.winfo_reqheight()
+        else:
+            self._reorder_row_h = 46
+        self._reorder_spacer = None
 
     def _group_tasks(self, task):
         data = load_all()
@@ -2208,68 +2211,122 @@ class TodoWidget:
                 and not is_done(t, data['records'], today())
                 and _group_of(t) == _group_of(task)]
 
+    def _ordered_group_ids(self, task):
+        """同组未完成任务按当前 order 排序后的 id 列表（不含被拖任务，含其位置概念）。"""
+        group = self._group_tasks(task)
+        group.sort(key=_order_key)
+        return [t['id'] for t in group]
+
     def _reorder_move(self, e):
         task = self._reorder_task
         if task is None:
             return
         dy = e.y_root - self._reorder_y0
-        if abs(dy) < 10 and not self._reorder_moved:
+        if abs(dy) < 8 and not self._reorder_moved:
             return
+        if not self._reorder_moved:
+            self._begin_drag_float(e, task)
         self._reorder_moved = True
 
         row = self._reorder_row
-        if row is not None and row.winfo_manager() == 'pack':
-            # 浮起被拖行：转为 place 绝对定位，跟随鼠标（半透明效果）
-            info = row.pack_info()
-            row.pack_forget()
-            row.place(x=6, y=info.get('pady', 0) + 0, width=self.list_frame.winfo_width() - 12)
-        # 更新被拖行位置：相对鼠标居中
+        # 被拖行跟随鼠标（相对 list_frame 居中）
         if row is not None:
             new_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
             row.place_configure(y=new_y)
 
-        # 实时让位：计算其余同组行应按何种顺序 pack
-        self._live_reflow(e, task, row)
+        # 判断空位是否应上/下移动
+        self._update_spacer(e, task)
 
-    def _live_reflow(self, e, task, drag_row):
-        data = load_all()
-        group = self._group_tasks(task)
-        group.sort(key=_order_key)
+    def _begin_drag_float(self, e, task):
+        row = self._reorder_row
+        if row is None:
+            return
+        # 浮起被拖行
+        info = row.pack_info()
+        row.pack_forget()
+        row.place(x=6, width=self.list_frame.winfo_width() - 12)
+        new_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
+        row.place_configure(y=new_y)
+        # 在原位置插入占位空位
+        spacer = tk.Frame(self.list_frame, bg='#eef0f7', height=self._reorder_row_h)
+        self._reorder_spacer = spacer
+        # 锚定：插到进度 card 之后、第一个同组 pack 行之前
+        anchor = self._group_anchors.get(self._reorder_group_title)
+        before = self._first_group_pack_before(anchor, exclude={task['id']})
+        spacer.pack(fill='x', padx=6, pady=3, before=before)
 
-        others = []
-        for t in group:
-            if t['id'] == task['id']:
+    def _first_group_pack_before(self, anchor, exclude=None):
+        """返回锚点之后第一个应 pack 的 widget（用于 before）。"""
+        exclude = exclude or set()
+        if anchor is None:
+            return None
+        siblings = self.list_frame.pack_slaves()
+        try:
+            ai = siblings.index(anchor)
+        except ValueError:
+            return None
+        for s in siblings[ai + 1:]:
+            if s.winfo_manager() == 'pack':
+                tid = getattr(s, '_task_id', None)
+                if tid in exclude:
+                    continue
+                return s
+        return None
+
+    def _update_spacer(self, e, task):
+        """根据鼠标位置决定空位是否上移/下移：越过相邻行中线则空位移动。"""
+        spacer = self._reorder_spacer
+        if spacer is None:
+            return
+        drag_center = e.y_root
+        # 收集其他任务行（不含 spacer、不含被拖行）的实际视觉位置
+        task_rows = []  # (top, bottom, widget, tid)
+        for w in self.list_frame.pack_slaves():
+            if w is spacer:
                 continue
-            w = self._row_widgets.get(t['id'])
-            if w is None:
-                continue
-            others.append((w.winfo_rooty(), t['id'], w))
-        others.sort(key=lambda x: x[0])
+            tid = getattr(w, '_task_id', None)
+            if tid is not None and tid != task['id']:
+                task_rows.append((w.winfo_rooty(), w.winfo_rooty() + w.winfo_height(), w, tid))
+        task_rows.sort(key=lambda x: x[0])
 
-        mouse_y = e.y_root
-        idx = 0
-        for i, (ry, tid, w) in enumerate(others):
-            center = ry + w.winfo_height() / 2
-            if mouse_y < center:
-                idx = i
+        # 拖动中心落在哪两个任务行之间 → 空位目标槽位
+        target_idx = 0
+        for i, it in enumerate(task_rows):
+            center = (it[0] + it[1]) / 2
+            if drag_center < center:
+                target_idx = i
                 break
         else:
-            idx = len(others)
+            target_idx = len(task_rows)
 
-        reordered = [oid for oid in [t['id'] for t in group] if oid != task['id']]
-        reordered.insert(idx, task['id'])
+        self._move_spacer_to(target_idx, task_rows)
 
-        # 只对「非拖拽行」做一次统一重 pack（按新顺序），拖拽行保持 place 跟随
-        self._repack_group([oid for oid in reordered if oid != task['id']],
-                           group_title=_group_of(task))
+    def _move_spacer_to(self, target_idx, task_rows):
+        spacer = self._reorder_spacer
+        if spacer is None:
+            return
+        # task_rows 是视觉顺序的 (top,bottom,w,tid) 列表（不含 spacer）
+        # before 应是 task_rows[target_idx] 的 widget（若 target_idx < len），否则 None（末尾）
+        if target_idx < len(task_rows):
+            before = task_rows[target_idx][2]
+        else:
+            before = None
+        # 若 before 就是当前 spacer 的下一个，无需移动
+        cur_before = None
+        siblings = self.list_frame.pack_slaves()
+        try:
+            si = siblings.index(spacer)
+            if si + 1 < len(siblings):
+                cur_before = siblings[si + 1]
+        except ValueError:
+            cur_before = None
+        if cur_before is before:
+            return
+        spacer.pack_forget()
+        spacer.pack(fill='x', padx=6, pady=3, before=before)
 
     def _repack_group(self, ordered_ids, group_title=None):
-        """按给定顺序把同组未完成行重新 pack 回原位（锚定在进度 card 之后）。
-
-        必须用 before= 锚定，否则 pack() 会把这些行丢到 list_frame 末尾，
-        串到其他类型下面，造成「本类型待办消失」。
-        """
-        # 先摘掉这些行（记录要 pack 的 widget）
+        """按给定顺序把本组未完成行 pack 回原位（锚定进度 card 之后，用 before 定位）。"""
         to_pack = []
         for oid in ordered_ids:
             w = self._row_widgets.get(oid)
@@ -2280,24 +2337,10 @@ class TodoWidget:
             elif w.winfo_manager() == 'place':
                 w.place_forget()
             to_pack.append(w)
-
         if not to_pack:
             return
-
-        # 找锚点：本组进度 card 之后的第一个仍 pack 着的 widget（作为 before）
         anchor = self._group_anchors.get(group_title) if group_title else None
-        before = None
-        if anchor is not None:
-            siblings = self.list_frame.pack_slaves()
-            try:
-                ai = siblings.index(anchor)
-            except ValueError:
-                ai = -1
-            for s in siblings[ai + 1:]:
-                if s.winfo_manager() == 'pack':
-                    before = s
-                    break
-
+        before = self._first_group_pack_before(anchor, exclude=set(ordered_ids))
         for w in to_pack:
             if before is not None:
                 w.pack(fill='x', padx=6, pady=3, before=before)
@@ -2306,16 +2349,14 @@ class TodoWidget:
 
     def _reorder_end(self, e, group_title):
         task = self._reorder_task
-        line = self._reorder_line
-        if line is not None:
-            line.destroy()
-            self._reorder_line = None
+        self._reorder_task = None
         if task is None:
             return
-        self._reorder_task = None
 
         row = self._reorder_row
         self._reorder_row = None
+        spacer = self._reorder_spacer
+        self._reorder_spacer = None
 
         if not self._reorder_moved:
             if row is not None and row.winfo_manager() == 'place':
@@ -2323,42 +2364,48 @@ class TodoWidget:
                 row.pack(fill='x', padx=6, pady=3)
             return
 
-        # 计算最终顺序并持久化 order
-        data = load_all()
-        group = self._group_tasks(task)
-        group.sort(key=_order_key)
-
-        mouse_y = e.y_root
-        others = []
-        for t in group:
-            if t['id'] == task['id']:
-                continue
-            w = self._row_widgets.get(t['id'])
-            if w is None:
-                continue
-            others.append((w.winfo_rooty(), t['id'], w))
-        others.sort(key=lambda x: x[0])
-        idx = 0
-        for i, (ry, tid, w) in enumerate(others):
-            center = ry + w.winfo_height() / 2
-            if mouse_y < center:
-                idx = i
-                break
+        # 计算空位最终槽位 → 新顺序
+        group_ids = self._ordered_group_ids(task)
+        # 其余行视觉顺序（不含被拖行与 spacer）
+        others_visual = []
+        for w in self.list_frame.pack_slaves():
+            tid = getattr(w, '_task_id', None)
+            if tid is not None and tid != task['id']:
+                others_visual.append(tid)
+        # spacer 在视觉顺序中的槽位 = 其余行中，spacer 之前有多少个任务行
+        if spacer is not None:
+            siblings = self.list_frame.pack_slaves()
+            slot = 0
+            for s in siblings:
+                if s is spacer:
+                    break
+                tid = getattr(s, '_task_id', None)
+                if tid is not None and tid != task['id']:
+                    slot += 1
         else:
-            idx = len(others)
+            slot = len(others_visual)
+        # 限制范围
+        slot = max(0, min(slot, len(others_visual)))
 
-        final_ids = [oid for oid in [t['id'] for t in group] if oid != task['id']]
-        final_ids.insert(idx, task['id'])
-        for i, tid in enumerate(final_ids):
+        # 从原 order 序列中移除被拖任务，再插到 slot 位置
+        base_ids = [oid for oid in group_ids if oid != task['id']]
+        base_ids.insert(slot, task['id'])
+
+        # 持久化 order
+        data = load_all()
+        for i, tid in enumerate(base_ids):
             for x in data['tasks']:
                 if x['id'] == tid:
                     x['order'] = i
         save_all(data)
 
-        # 无感恢复：拖拽行摘掉 place，按新顺序重新 pack（不整屏 refresh）
+        # 移除 spacer，把被拖行补回 pack（按新顺序，锚定原位）
+        if spacer is not None:
+            spacer.destroy()
         if row is not None and row.winfo_manager() == 'place':
             row.place_forget()
-        self._repack_group(final_ids, group_title=group_title)
+        # 用最终顺序重 pack 本组全部未完成行（锚定原位）
+        self._repack_group(base_ids, group_title=group_title)
 
 
 def _group_of(t):
