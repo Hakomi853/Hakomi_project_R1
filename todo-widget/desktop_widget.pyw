@@ -2324,19 +2324,19 @@ class TodoWidget:
         return None
 
     def _group_bottom_anchor(self, title):
-        """返回本组的「底部锚点」：优先用下一组进度 card；无则用本组 holder/折叠按钮；
-        都没有则 None（组是最后一组，底部即列表末尾）。"""
-        # 下一组 card（若本组之后还有组）
-        bottom = self._group_bottoms.get(title)
-        if bottom is not None:
-            return bottom
-        # 本组 holder / 折叠按钮
+        """返回本组的「底部锚点」：空位/拖动应停在此 widget 之前（之上）。
+
+        优先级：本组 holder > 本组折叠按钮 > 下一组 card > None(列表末尾)。
+        这样有已完成任务的组，空位停在折叠按钮之上，不会越过它。"""
         holder = self._done_holders.get(title)
         if holder is not None and holder.winfo_manager() == 'pack':
             return holder
         toggle = self._done_toggles.get(title)
         if toggle is not None and toggle.winfo_manager() == 'pack':
             return toggle
+        bottom = self._group_bottoms.get(title)
+        if bottom is not None:
+            return bottom
         return None
 
     def _update_spacer(self, e, task):
