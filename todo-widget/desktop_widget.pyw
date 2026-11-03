@@ -1470,6 +1470,7 @@ class TodoWidget:
         self._row_widgets = {}      # task_id -> 渲染的行 frame（拖动让位用）
         self._done_holders = {}     # 组标题 -> 已完成区容器 frame（展开折叠动画用）
         self._done_toggles = {}     # 组标题 -> 折叠按钮 widget
+        self._group_anchors = {}    # 组标题 -> 该组未完成行的锚点 widget（进度 card）
 
         self.reminded = set()   # 已提醒 (task_id, date, time)
 
@@ -1974,6 +1975,7 @@ class TodoWidget:
         self._row_widgets = {}
         self._done_holders = {}
         self._done_toggles = {}
+        self._group_anchors = {}
 
         if not tasks:
             tk.Label(self.list_frame,
@@ -2018,6 +2020,9 @@ class TodoWidget:
 
         # 未完成按用户拖动排序（order 字段），已完成保持原序
         undone.sort(key=_order_key)
+
+        # 记录该组未完成行的锚点（进度 card），供拖动重排时用 before 插回原位
+        self._group_anchors[title] = card
 
         for t in undone:
             self._render_task(t, group_title=title)
@@ -2255,11 +2260,16 @@ class TodoWidget:
         reordered.insert(idx, task['id'])
 
         # 只对「非拖拽行」做一次统一重 pack（按新顺序），拖拽行保持 place 跟随
-        self._repack_group([oid for oid in reordered if oid != task['id']])
+        self._repack_group([oid for oid in reordered if oid != task['id']],
+                           group_title=_group_of(task))
 
-    def _repack_group(self, ordered_ids):
-        """按给定顺序重新 pack 这些行（不含正在拖拽的 place 行）。"""
-        # 先全部摘掉（记录要 pack 的行），pack_forget 后 winfo_manager 会变空，不能依赖它判断
+    def _repack_group(self, ordered_ids, group_title=None):
+        """按给定顺序把同组未完成行重新 pack 回原位（锚定在进度 card 之后）。
+
+        必须用 before= 锚定，否则 pack() 会把这些行丢到 list_frame 末尾，
+        串到其他类型下面，造成「本类型待办消失」。
+        """
+        # 先摘掉这些行（记录要 pack 的 widget）
         to_pack = []
         for oid in ordered_ids:
             w = self._row_widgets.get(oid)
@@ -2267,10 +2277,32 @@ class TodoWidget:
                 continue
             if w.winfo_manager() == 'pack':
                 w.pack_forget()
-                to_pack.append(w)
-        # 再按顺序重新 pack
+            elif w.winfo_manager() == 'place':
+                w.place_forget()
+            to_pack.append(w)
+
+        if not to_pack:
+            return
+
+        # 找锚点：本组进度 card 之后的第一个仍 pack 着的 widget（作为 before）
+        anchor = self._group_anchors.get(group_title) if group_title else None
+        before = None
+        if anchor is not None:
+            siblings = self.list_frame.pack_slaves()
+            try:
+                ai = siblings.index(anchor)
+            except ValueError:
+                ai = -1
+            for s in siblings[ai + 1:]:
+                if s.winfo_manager() == 'pack':
+                    before = s
+                    break
+
         for w in to_pack:
-            w.pack(fill='x', padx=6, pady=3)
+            if before is not None:
+                w.pack(fill='x', padx=6, pady=3, before=before)
+            else:
+                w.pack(fill='x', padx=6, pady=3)
 
     def _reorder_end(self, e, group_title):
         task = self._reorder_task
@@ -2326,7 +2358,7 @@ class TodoWidget:
         # 无感恢复：拖拽行摘掉 place，按新顺序重新 pack（不整屏 refresh）
         if row is not None and row.winfo_manager() == 'place':
             row.place_forget()
-        self._repack_group(final_ids)
+        self._repack_group(final_ids, group_title=group_title)
 
 
 def _group_of(t):
