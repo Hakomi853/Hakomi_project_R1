@@ -2292,9 +2292,9 @@ class TodoWidget:
         edge = 28   # 触发滚动的边缘带宽度（px）
         my = e.y_root
         if my < top + edge:
-            self.canvas.yview_scroll(-2, 'units')
+            self.canvas.yview_scroll(-1, 'units')
         elif my > bottom - edge:
-            self.canvas.yview_scroll(2, 'units')
+            self.canvas.yview_scroll(1, 'units')
 
     def _group_bounds(self, row_h):
         """返回本组拖动行允许的 y 范围 (min_y, max_y)，相对 list_frame。"""
