@@ -2292,9 +2292,23 @@ class TodoWidget:
         edge = 28   # 触发滚动的边缘带宽度（px）
         my = e.y_root
         if my < top + edge:
-            self.canvas.yview_scroll(-1, 'units')
+            self._drag_scroll_by(-0.2)
         elif my > bottom - edge:
-            self.canvas.yview_scroll(1, 'units')
+            self._drag_scroll_by(0.2)
+
+    def _drag_scroll_by(self, frac):
+        """按可视区高度的 frac 比例滚动（0.2 约等于缓慢滚动）。"""
+        try:
+            total = self.canvas.winfo_reqheight()  # 内容总高度
+            view_h = self.canvas.winfo_height()    # 可视高度
+            if total <= view_h:
+                return
+            y0, y1 = self.canvas.yview()           # 当前可视比例 [0..1]
+            step = (view_h / total) * frac
+            new0 = max(0.0, min(1.0 - (y1 - y0), y0 + step))
+            self.canvas.yview_moveto(new0)
+        except Exception:
+            pass
 
     def _group_bounds(self, row_h):
         """返回本组拖动行允许的 y 范围 (min_y, max_y)，相对 list_frame。"""
