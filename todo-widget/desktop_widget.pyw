@@ -487,6 +487,17 @@ def tasks_for_date(tasks, d):
     return [t for t in tasks if t.get('active', True) and should_do_on(t, d)]
 
 
+def _order_key(t):
+    """排序键：优先用显式 order，缺失则用创建时间，再退化为 id。"""
+    o = t.get('order')
+    if o is not None:
+        return (0, o)
+    ca = t.get('created_at')
+    if ca:
+        return (1, ca)
+    return (2, t.get('id', ''))
+
+
 def get_record(records, task_id, date_iso):
     for r in records:
         if r['task_id'] == task_id and r['date'] == date_iso:
@@ -1313,8 +1324,20 @@ class TaskManagerWindow(tk.Toplevel):
             tk.Label(self.list_frame, text='还没有任何待办\n点右上角「＋ 添加」创建', bg=BG, fg=SUB,
                      font=FONT_SMALL, justify='center').pack(pady=40)
             return
-        for t in tasks:
-            self._render_task(t)
+
+        # 按类型分组显示（每日 / 每周 / 一次性 / 周期）
+        groups = [('每日', lambda t: t['type'] == 'daily'),
+                  ('每周', lambda t: t['type'] == 'weekly'),
+                  ('一次性', lambda t: t['type'] == 'once'),
+                  ('自定义周期', lambda t: t['type'] == 'custom')]
+        for gname, pred in groups:
+            subset = [t for t in tasks if pred(t)]
+            if not subset:
+                continue
+            tk.Label(self.list_frame, text='%s（%d）' % (gname, len(subset)), bg=BG, fg=SUB,
+                     font=FONT_SMALL, anchor='w').pack(fill='x', pady=(10, 2))
+            for t in subset:
+                self._render_task(t)
 
     def _render_task(self, t):
         meta = TYPE_META.get(t['type'], TYPE_META['daily'])
@@ -1931,6 +1954,12 @@ class TodoWidget:
         data = load_all()
         tasks = tasks_for_date(data['tasks'], today())
 
+        # 记录当前滚动位置，刷新后恢复，避免折叠时界面跳动
+        try:
+            keep_y = self.canvas.yview()[0]
+        except Exception:
+            keep_y = 0.0
+
         self.title_label.config(text='📋 %s · %s' % (today_iso(), WEEK_FULL[today().weekday()]))
 
         for child in self.list_frame.winfo_children():
@@ -1954,6 +1983,9 @@ class TodoWidget:
         self._render_group('本周进度', weekly_group, data, len(weekly_group))
         self._render_group('周期进度', custom_group, data, len(all_custom))
 
+        self.root.update_idletasks()
+        self.canvas.yview_moveto(keep_y)
+
     def _render_group(self, title, group, data, total):
         if not group:
             return   # 该类型没有任务，不显示进度条
@@ -1974,11 +2006,14 @@ class TodoWidget:
         undone = [t for t in group if not is_done(t, data['records'], today())]
         done_tasks = [t for t in group if is_done(t, data['records'], today())]
 
+        # 未完成按用户拖动排序（order 字段），已完成保持原序
+        undone.sort(key=_order_key)
+
         for t in undone:
-            self._render_task(t)
+            self._render_task(t, group_title=title)
 
         if done_tasks:
-            collapsed = self._done_collapsed.get(title, False)
+            collapsed = self._done_collapsed.get(title, True)   # 默认折叠已完成
             if collapsed:
                 self._render_done_toggle(title, '▾ 展开 %d 项已完成' % len(done_tasks))
             else:
@@ -1995,10 +2030,10 @@ class TodoWidget:
         btn.bind('<Leave>', lambda e: btn.config(fg=SUB))
 
     def _toggle_done(self, title):
-        self._done_collapsed[title] = not self._done_collapsed.get(title, False)
+        self._done_collapsed[title] = not self._done_collapsed.get(title, True)
         self.refresh()
 
-    def _render_task(self, t):
+    def _render_task(self, t, group_title=None):
         data = load_all()
         if self._is_weekly_once(t):
             wr = cycle_records(data['records'], t['id'], today(), t.get('reset_weekday', 0))
@@ -2011,6 +2046,7 @@ class TodoWidget:
 
         row = tk.Frame(self.list_frame, bg=CARD)
         row.pack(fill='x', padx=6, pady=3)
+        row._task_id = t['id']   # 供拖动排序识别行所属任务
 
         # 打卡按钮
         if t['check_type'] == 'checkbox':
@@ -2029,8 +2065,8 @@ class TodoWidget:
         box.bind('<Button-1>', lambda e, t=t: self.do_checkin(t))
 
         # 类型图标
-        tk.Label(row, text=meta['icon'], bg=CARD, fg=meta['color'], font=FONT_TEXT, width=2)\
-            .pack(side='left')
+        icon_lbl = tk.Label(row, text=meta['icon'], bg=CARD, fg=meta['color'], font=FONT_TEXT, width=2)
+        icon_lbl.pack(side='left')
 
         # 文字
         col = tk.Frame(row, bg=CARD)
@@ -2054,9 +2090,16 @@ class TodoWidget:
             sub_parts.append('⏰ ' + ('、'.join(times) if times else ''))
         if rec and rec.get('value'):
             sub_parts.append('打卡：' + rec['value'])
-        tk.Label(col, text='  '.join(sub_parts), bg=CARD, fg=SUB, font=FONT_SUB, anchor='w',
-                 justify='left', wraplength=210)\
-            .pack(fill='x')
+        sub_lbl = tk.Label(col, text='  '.join(sub_parts), bg=CARD, fg=SUB, font=FONT_SUB, anchor='w',
+                           justify='left', wraplength=210)
+        sub_lbl.pack(fill='x')
+
+        # 拖动排序：仅未完成任务可拖（已完成的不可拖）。绑在文字区/图标区，避开打卡与删除按钮
+        if not done and group_title:
+            for wdg in (row, col, name, sub_lbl, icon_lbl):
+                wdg.bind('<Button-1>', lambda e, t=t: self._reorder_start(e, t))
+                wdg.bind('<B1-Motion>', self._reorder_move)
+                wdg.bind('<ButtonRelease-1>', lambda e, gt=group_title: self._reorder_end(e, gt))
 
         # 删除
         del_btn = tk.Label(row, text='✕', bg=CARD, fg=SUB, font=FONT_TEXT, cursor='hand2', width=2)
@@ -2064,6 +2107,82 @@ class TodoWidget:
         del_btn.bind('<Button-1>', lambda e, t=t: self.remove_task(t['id']))
         del_btn.bind('<Enter>', lambda e: del_btn.config(fg=DANGER))
         del_btn.bind('<Leave>', lambda e: del_btn.config(fg=SUB))
+
+    # ---------- 拖动排序（仅展开态、未完成任务可拖） ----------
+    def _reorder_start(self, e, task):
+        self._reorder_task = task
+        self._reorder_row = e.widget.master
+        self._reorder_y0 = e.y_root
+        self._reorder_moved = False
+        self._reorder_line = tk.Frame(self.list_frame, bg=ACCENT, height=2)
+
+    def _reorder_move(self, e):
+        if not getattr(self, '_reorder_task', None):
+            return
+        dy = e.y_root - self._reorder_y0
+        if abs(dy) < 12 and not self._reorder_moved:
+            return
+        self._reorder_moved = True
+        # 在 list_frame 内移动插入指示线到当前鼠标对应位置
+        w = e.widget
+        y_in_frame = w.winfo_rooty() - self.list_frame.winfo_rooty() + e.y
+        self._reorder_line.place(x=6, y=y_in_frame, width=self.list_frame.winfo_width() - 12)
+
+    def _reorder_end(self, e, group_title):
+        task = getattr(self, '_reorder_task', None)
+        line = getattr(self, '_reorder_line', None)
+        if line is not None:
+            line.destroy()
+            self._reorder_line = None
+        if not task or not getattr(self, '_reorder_moved', False):
+            self._reorder_task = None
+            return
+        self._reorder_task = None
+
+        # 用插入线当前 y 计算目标位置（基于同组未完成任务的真实行位置）
+        data = load_all()
+        undone = [t for t in data['tasks']
+                  if t.get('active', True)
+                  and not is_done(t, data['records'], today())
+                  and _group_of(t) == group_title]
+        undone.sort(key=_order_key)
+
+        # 收集当前渲染的、同组未完成行的真实 y 中心
+        rows = []   # [(center_y, task_id)]
+        for child in self.list_frame.winfo_children():
+            tid = getattr(child, '_task_id', None)
+            if tid is None:
+                continue
+            if tid in {t['id'] for t in undone}:
+                cy = child.winfo_y() + child.winfo_height() / 2
+                rows.append((cy, tid))
+        rows.sort(key=lambda x: x[0])
+
+        mouse_y = e.y_root - self.list_frame.winfo_rooty()
+        insert_at = len(rows)
+        for i, (cy, tid) in enumerate(rows):
+            if mouse_y < cy:
+                insert_at = i
+                break
+
+        ids = [t['id'] for t in undone]
+        if task['id'] in ids:
+            ids.remove(task['id'])
+            ids.insert(insert_at, task['id'])
+        for i, tid in enumerate(ids):
+            for x in data['tasks']:
+                if x['id'] == tid:
+                    x['order'] = i
+        save_all(data)
+        self.refresh()
+
+
+def _group_of(t):
+    if t['type'] in ('daily', 'once'):
+        return '今日进度'
+    if t['type'] == 'weekly':
+        return '本周进度'
+    return '周期进度'
 
 
 def main():
