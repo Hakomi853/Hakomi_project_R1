@@ -2416,85 +2416,83 @@ class TodoWidget:
         return None
 
     def _update_spacer(self, e, task):
-        """根据鼠标位置决定空位应处的槽位，并完整重排本组 pack 顺序（含空位）。"""
+        """逐格移动空位：被拖行上/下越过相邻待办中线时，空位向该方向移动一格。"""
         spacer = self._reorder_spacer
         if spacer is None:
             return
         drag_center = e.y_root
-        # 收集其他任务行（不含 spacer、不含被拖行）的实际视觉位置
-        task_rows = []  # (top, bottom, widget, tid)
-        for w in self.list_frame.pack_slaves():
-            if w is spacer:
-                continue
-            tid = getattr(w, '_task_id', None)
-            if tid is not None and tid != task['id']:
-                task_rows.append((w.winfo_rooty(), w.winfo_rooty() + w.winfo_height(), w, tid))
-        task_rows.sort(key=lambda x: x[0])
 
-        # target_idx = 空位上方应有多少个任务行（越过某行中线则空位下移）
-        target_idx = 0
-        for i, it in enumerate(task_rows):
-            center = (it[0] + it[1]) / 2
+        # 空位当前的上一个/下一个任务行（相对 pack 顺序）
+        prev_row, next_row = self._spacer_neighbors(spacer, task)
+
+        # 向上移动：被拖行上界越过「空位上方待办」的中线 → 空位上移一格
+        if prev_row is not None:
+            top = prev_row.winfo_rooty()
+            center = top + prev_row.winfo_height() / 2
             if drag_center < center:
-                target_idx = i
-                break
-        else:
-            target_idx = len(task_rows)
+                self._swap_spacer_up(spacer, prev_row)
+                return
+        # 向下移动：被拖行下界越过「空位下方待办」的中线 → 空位下移一格
+        if next_row is not None:
+            top = next_row.winfo_rooty()
+            center = top + next_row.winfo_height() / 2
+            if drag_center > center:
+                self._swap_spacer_down(spacer, next_row)
+                return
 
-        self._apply_spacer_slot(target_idx, task_rows)
+    def _spacer_neighbors(self, spacer, task):
+        """返回空位的上一个/下一个任务行 widget（不含被拖行、不含 spacer）。"""
+        siblings = self.list_frame.pack_slaves()
+        prev_row = None
+        next_row = None
+        seen_spacer = False
+        last_task = None
+        for s in siblings:
+            if s is spacer:
+                seen_spacer = True
+                prev_row = last_task
+                continue
+            tid = getattr(s, '_task_id', None)
+            if tid is None or tid == task['id']:
+                continue
+            if seen_spacer and next_row is None:
+                next_row = s
+            last_task = s
+        return prev_row, next_row
 
-    def _apply_spacer_slot(self, target_idx, task_rows):
-        """把空位与其余任务行按正确顺序整体重排（空位插在 target_idx 个任务行之后）。
-        一次性重建 pack 顺序，避免 before/cur_before 增量判定导致的交换错位。"""
-        spacer = self._reorder_spacer
-        if spacer is None:
+    def _swap_spacer_up(self, spacer, prev_row):
+        """空位上移一格：把 spacer 移到 prev_row 之前。"""
+        # 检查当前是否已经是这个位置（避免重复）
+        cur_before = self._spacer_cur_before(spacer)
+        if cur_before is prev_row:
             return
-        # 目标顺序：前 target_idx 个任务行 + spacer + 其余任务行
-        ordered_widgets = []
-        for i, it in enumerate(task_rows):
-            if i == target_idx:
-                ordered_widgets.append(spacer)
-            ordered_widgets.append(it[2])
-        if target_idx >= len(task_rows):
-            ordered_widgets.append(spacer)
+        spacer.pack_forget()
+        spacer.pack(fill='x', padx=6, pady=3, before=prev_row)
 
-        # 判断是否已按此顺序排列（避免无谓重排抖动）
-        cur = [w for w in self.list_frame.pack_slaves()
-               if (w is spacer) or (getattr(w, '_task_id', None) in {it[3] for it in task_rows})]
-        if cur == ordered_widgets:
+    def _swap_spacer_down(self, spacer, next_row):
+        """空位下移一格：把 spacer 移到 next_row 之后。"""
+        # pack 的 after 参数：插到 next_row 之后
+        cur_before = self._spacer_cur_before(spacer)
+        # 期望 next_row 位于 spacer 之前；若 next_row 已经是 spacer 的上一个，无需移动
+        siblings = self.list_frame.pack_slaves()
+        try:
+            si = siblings.index(spacer)
+        except ValueError:
             return
+        # spacer 已在 next_row 之后（即 next_row 在 spacer 上方）则无需移动
+        ni = siblings.index(next_row) if next_row in siblings else -1
+        if ni != -1 and ni < si:
+            return
+        spacer.pack_forget()
+        spacer.pack(fill='x', padx=6, pady=3, after=next_row)
 
-        # 全部摘掉 pack（含 spacer 和本组任务行）
-        all_ids = {it[3] for it in task_rows}
-        for w in ordered_widgets:
-            if w.winfo_manager() == 'pack':
-                w.pack_forget()
-
-        # 锚点：本组进度 card 之后第一个「非本组未完成行」的 pack 兄弟（holder/折叠按钮/下一组 card）
-        anchor = self._group_anchors.get(self._reorder_group_title)
-        before = None
-        if anchor is not None:
-            siblings = self.list_frame.pack_slaves()
-            try:
-                ai = siblings.index(anchor)
-            except ValueError:
-                ai = -1
-            for s in siblings[ai + 1:]:
-                if s.winfo_manager() == 'pack':
-                    tid = getattr(s, '_task_id', None)
-                    if tid not in all_ids and s is not spacer:
-                        before = s
-                        break
-
-        # 按顺序重新 pack。
-        # 有 before 锚定时要倒序 pack（pack(before=X) 每次插到 X 之前，正序会反转）；
-        # 无 before（追加到末尾）时正序 pack 即可。
-        seq = reversed(ordered_widgets) if before is not None else ordered_widgets
-        for w in seq:
-            if before is not None:
-                w.pack(fill='x', padx=6, pady=3, before=before)
-            else:
-                w.pack(fill='x', padx=6, pady=3)
+    def _spacer_cur_before(self, spacer):
+        siblings = self.list_frame.pack_slaves()
+        try:
+            si = siblings.index(spacer)
+        except ValueError:
+            return None
+        return siblings[si + 1] if si + 1 < len(siblings) else None
 
     def _repack_group(self, ordered_ids, group_title=None):
         """按给定顺序把本组未完成行 pack 回原位（锚定进度 card 之后，用 before 定位）。"""
@@ -2512,9 +2510,7 @@ class TodoWidget:
             return
         anchor = self._group_anchors.get(group_title) if group_title else None
         before = self._first_group_pack_before(anchor, exclude=set(ordered_ids))
-        # 有 before 时倒序 pack（避免顺序反转）
-        seq = reversed(to_pack) if before is not None else to_pack
-        for w in seq:
+        for w in to_pack:
             if before is not None:
                 w.pack(fill='x', padx=6, pady=3, before=before)
             else:
