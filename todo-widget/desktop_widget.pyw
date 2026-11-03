@@ -2130,12 +2130,12 @@ class TodoWidget:
 
     def _holder_content_height(self, holder):
         """返回 holder 内子行的实际占位高度（含 pack 的 pady 上下边距）。
-        用最后一个子行的 y+height 计算，避免 reqheight 求和漏掉 pady 导致最后一项被裁切。"""
+        用 reqheight 求和 + 每行 6px 上下 pady，避免依赖运行时 winfo_height
+        （holder 折叠态高度=1 时会裁剪子行高度导致算错）。"""
         children = holder.winfo_children()
         if not children:
             return 1
-        holder.update_idletasks()
-        return max(c.winfo_y() + c.winfo_height() for c in children)
+        return sum(c.winfo_reqheight() for c in children) + len(children) * 6
 
     def _render_task(self, t, group_title=None, parent=None):
         data = load_all()
