@@ -1463,6 +1463,13 @@ class TodoWidget:
         self._slide_after = None
         self._dragging = False      # 拖动窗口进行中
         self._done_collapsed = {}   # 各类型「折叠已完成」状态 {group_title: bool}
+        self._reorder_task = None   # 正在拖拽排序的任务
+        self._reorder_row = None    # 被拖拽的行 widget
+        self._reorder_line = None   # 插入指示线
+        self._reorder_moved = False
+        self._row_widgets = {}      # task_id -> 渲染的行 frame（拖动让位用）
+        self._done_holders = {}     # 组标题 -> 已完成区容器 frame（展开折叠动画用）
+        self._done_toggles = {}     # 组标题 -> 折叠按钮 widget
 
         self.reminded = set()   # 已提醒 (task_id, date, time)
 
@@ -1964,6 +1971,9 @@ class TodoWidget:
 
         for child in self.list_frame.winfo_children():
             child.destroy()
+        self._row_widgets = {}
+        self._done_holders = {}
+        self._done_toggles = {}
 
         if not tasks:
             tk.Label(self.list_frame,
@@ -2014,15 +2024,26 @@ class TodoWidget:
 
         if done_tasks:
             collapsed = self._done_collapsed.get(title, True)   # 默认折叠已完成
+            # 已完成任务区包一层容器（只含任务行），展开/折叠时平滑过渡高度
+            holder = tk.Frame(self.list_frame, bg=BG)
+            holder.pack(fill='x')
+            holder._done_title = title
+            holder.pack_propagate(False)
             if collapsed:
-                self._render_done_toggle(title, '▾ 展开 %d 项已完成' % len(done_tasks))
+                holder.config(height=1)
             else:
                 for t in done_tasks:
-                    self._render_task(t)
-                self._render_done_toggle(title, '▴ 折叠已完成（%d）' % len(done_tasks))
+                    self._render_task(t, parent=holder)
+                holder.update_idletasks()
+                holder.config(height=holder.winfo_reqheight())
+            self._done_holders[title] = holder
+            # 折叠按钮始终在容器外，保证可见
+            self._render_done_toggle(title, ('▾ 展开 %d 项已完成' if collapsed else '▴ 折叠已完成（%d）') % len(done_tasks))
+            self._done_toggles[title] = self.list_frame.winfo_children()[-1]
 
-    def _render_done_toggle(self, title, text):
-        btn = tk.Label(self.list_frame, text=text, bg='#eef0f7', fg=SUB,
+    def _render_done_toggle(self, title, text, holder=None):
+        parent = holder if holder is not None else self.list_frame
+        btn = tk.Label(parent, text=text, bg='#eef0f7', fg=SUB,
                        font=FONT_SMALL, cursor='hand2', pady=5)
         btn.pack(fill='x', padx=6, pady=(2, 4))
         btn.bind('<Button-1>', lambda e: self._toggle_done(title))
@@ -2031,9 +2052,59 @@ class TodoWidget:
 
     def _toggle_done(self, title):
         self._done_collapsed[title] = not self._done_collapsed.get(title, True)
-        self.refresh()
+        self._animate_done(title)
 
-    def _render_task(self, t, group_title=None):
+    def _animate_done(self, title):
+        """平滑展开/折叠已完成区：重建该组已完成任务行并逐帧过渡高度。"""
+        data = load_all()
+        tasks = tasks_for_date(data['tasks'], today())
+        if title == '今日进度':
+            group = [t for t in tasks if t['type'] in ('daily', 'once')]
+        elif title == '本周进度':
+            group = [t for t in tasks if t['type'] == 'weekly']
+        else:
+            group = [t for t in tasks if t['type'] == 'custom']
+        done_tasks = [t for t in group if is_done(t, data['records'], today())]
+        collapsed = self._done_collapsed.get(title, True)
+
+        holder = self._done_holders.get(title)
+        if holder is None:
+            self.refresh()
+            return
+        # 清空容器内的任务行，并同步清理 _row_widgets
+        for child in holder.winfo_children():
+            tid = getattr(child, '_task_id', None)
+            child.destroy()
+            if tid is not None and self._row_widgets.get(tid) is child:
+                del self._row_widgets[tid]
+
+        target_h = 1
+        if not collapsed:
+            for t in done_tasks:
+                self._render_task(t, parent=holder)
+            holder.update_idletasks()
+            target_h = holder.winfo_reqheight()
+
+        # 更新折叠按钮文字
+        btn = self._done_toggles.get(title)
+        if btn is not None:
+            btn.config(text=('▾ 展开 %d 项已完成' if collapsed else '▴ 折叠已完成（%d）') % len(done_tasks))
+
+        cur = holder.winfo_height()
+        steps = 8
+        delta = (target_h - cur) / steps
+        self._animate_height_step(holder, cur, target_h, delta, steps)
+
+    def _animate_height_step(self, holder, cur, target, delta, remain):
+        cur += delta
+        if remain <= 0:
+            holder.config(height=target)
+            self.root.update_idletasks()
+            return
+        holder.config(height=max(1, int(cur)))
+        self.root.after(16, lambda: self._animate_height_step(holder, cur, target, delta, remain - 1))
+
+    def _render_task(self, t, group_title=None, parent=None):
         data = load_all()
         if self._is_weekly_once(t):
             wr = cycle_records(data['records'], t['id'], today(), t.get('reset_weekday', 0))
@@ -2044,9 +2115,11 @@ class TodoWidget:
             done = rec is not None
         meta = TYPE_META.get(t['type'], TYPE_META['daily'])
 
-        row = tk.Frame(self.list_frame, bg=CARD)
+        container = parent if parent is not None else self.list_frame
+        row = tk.Frame(container, bg=CARD)
         row.pack(fill='x', padx=6, pady=3)
         row._task_id = t['id']   # 供拖动排序识别行所属任务
+        self._row_widgets[t['id']] = row
 
         # 打卡按钮
         if t['check_type'] == 'checkbox':
@@ -2108,73 +2181,148 @@ class TodoWidget:
         del_btn.bind('<Enter>', lambda e: del_btn.config(fg=DANGER))
         del_btn.bind('<Leave>', lambda e: del_btn.config(fg=SUB))
 
-    # ---------- 拖动排序（仅展开态、未完成任务可拖） ----------
+    # ---------- 拖动排序（实时让位，仅展开态、未完成任务可拖） ----------
     def _reorder_start(self, e, task):
         self._reorder_task = task
-        self._reorder_row = e.widget.master
+        self._reorder_row = self._row_widgets.get(task['id'])
         self._reorder_y0 = e.y_root
         self._reorder_moved = False
+        self._reorder_group = self._group_tasks(task)
+        # 记录拖拽行原始 pack 参数，供恢复
+        if self._reorder_row is not None:
+            self._reorder_row_pack = self._reorder_row.pack_info()
+        # 插入指示线
         self._reorder_line = tk.Frame(self.list_frame, bg=ACCENT, height=2)
 
+    def _group_tasks(self, task):
+        data = load_all()
+        return [t for t in data['tasks']
+                if t.get('active', True)
+                and not is_done(t, data['records'], today())
+                and _group_of(t) == _group_of(task)]
+
     def _reorder_move(self, e):
-        if not getattr(self, '_reorder_task', None):
+        task = self._reorder_task
+        if task is None:
             return
         dy = e.y_root - self._reorder_y0
-        if abs(dy) < 12 and not self._reorder_moved:
+        if abs(dy) < 10 and not self._reorder_moved:
             return
         self._reorder_moved = True
-        # 在 list_frame 内移动插入指示线到当前鼠标对应位置
-        w = e.widget
-        y_in_frame = w.winfo_rooty() - self.list_frame.winfo_rooty() + e.y
-        self._reorder_line.place(x=6, y=y_in_frame, width=self.list_frame.winfo_width() - 12)
+
+        row = self._reorder_row
+        if row is not None and row.winfo_manager() == 'pack':
+            # 浮起被拖行：转为 place 绝对定位，跟随鼠标（半透明效果）
+            info = row.pack_info()
+            row.pack_forget()
+            row.place(x=6, y=info.get('pady', 0) + 0, width=self.list_frame.winfo_width() - 12)
+        # 更新被拖行位置：相对鼠标居中
+        if row is not None:
+            new_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
+            row.place_configure(y=new_y)
+
+        # 实时让位：计算其余同组行应按何种顺序 pack
+        self._live_reflow(e, task, row)
+
+    def _live_reflow(self, e, task, drag_row):
+        data = load_all()
+        group = self._group_tasks(task)
+        group.sort(key=_order_key)
+
+        others = []
+        for t in group:
+            if t['id'] == task['id']:
+                continue
+            w = self._row_widgets.get(t['id'])
+            if w is None:
+                continue
+            others.append((w.winfo_rooty(), t['id'], w))
+        others.sort(key=lambda x: x[0])
+
+        mouse_y = e.y_root
+        idx = 0
+        for i, (ry, tid, w) in enumerate(others):
+            center = ry + w.winfo_height() / 2
+            if mouse_y < center:
+                idx = i
+                break
+        else:
+            idx = len(others)
+
+        reordered = [oid for oid in [t['id'] for t in group] if oid != task['id']]
+        reordered.insert(idx, task['id'])
+
+        # 只对「非拖拽行」做一次统一重 pack（按新顺序），拖拽行保持 place 跟随
+        self._repack_group([oid for oid in reordered if oid != task['id']])
+
+    def _repack_group(self, ordered_ids):
+        """按给定顺序重新 pack 这些行（不含正在拖拽的 place 行）。"""
+        # 先全部摘掉 pack
+        for oid in ordered_ids:
+            w = self._row_widgets.get(oid)
+            if w is not None and w.winfo_manager() == 'pack':
+                w.pack_forget()
+        # 再按顺序 pack
+        for oid in ordered_ids:
+            w = self._row_widgets.get(oid)
+            if w is not None and w.winfo_manager() == 'pack':
+                w.pack(fill='x', padx=6, pady=3)
 
     def _reorder_end(self, e, group_title):
-        task = getattr(self, '_reorder_task', None)
-        line = getattr(self, '_reorder_line', None)
+        task = self._reorder_task
+        line = self._reorder_line
         if line is not None:
             line.destroy()
             self._reorder_line = None
-        if not task or not getattr(self, '_reorder_moved', False):
-            self._reorder_task = None
+        if task is None:
             return
         self._reorder_task = None
 
-        # 用插入线当前 y 计算目标位置（基于同组未完成任务的真实行位置）
+        row = self._reorder_row
+        self._reorder_row = None
+
+        if not self._reorder_moved:
+            if row is not None and row.winfo_manager() == 'place':
+                row.place_forget()
+                row.pack(fill='x', padx=6, pady=3)
+            return
+
+        # 计算最终顺序并持久化 order
         data = load_all()
-        undone = [t for t in data['tasks']
-                  if t.get('active', True)
-                  and not is_done(t, data['records'], today())
-                  and _group_of(t) == group_title]
-        undone.sort(key=_order_key)
+        group = self._group_tasks(task)
+        group.sort(key=_order_key)
 
-        # 收集当前渲染的、同组未完成行的真实 y 中心
-        rows = []   # [(center_y, task_id)]
-        for child in self.list_frame.winfo_children():
-            tid = getattr(child, '_task_id', None)
-            if tid is None:
+        mouse_y = e.y_root
+        others = []
+        for t in group:
+            if t['id'] == task['id']:
                 continue
-            if tid in {t['id'] for t in undone}:
-                cy = child.winfo_y() + child.winfo_height() / 2
-                rows.append((cy, tid))
-        rows.sort(key=lambda x: x[0])
-
-        mouse_y = e.y_root - self.list_frame.winfo_rooty()
-        insert_at = len(rows)
-        for i, (cy, tid) in enumerate(rows):
-            if mouse_y < cy:
-                insert_at = i
+            w = self._row_widgets.get(t['id'])
+            if w is None:
+                continue
+            others.append((w.winfo_rooty(), t['id'], w))
+        others.sort(key=lambda x: x[0])
+        idx = 0
+        for i, (ry, tid, w) in enumerate(others):
+            center = ry + w.winfo_height() / 2
+            if mouse_y < center:
+                idx = i
                 break
+        else:
+            idx = len(others)
 
-        ids = [t['id'] for t in undone]
-        if task['id'] in ids:
-            ids.remove(task['id'])
-            ids.insert(insert_at, task['id'])
-        for i, tid in enumerate(ids):
+        final_ids = [oid for oid in [t['id'] for t in group] if oid != task['id']]
+        final_ids.insert(idx, task['id'])
+        for i, tid in enumerate(final_ids):
             for x in data['tasks']:
                 if x['id'] == tid:
                     x['order'] = i
         save_all(data)
-        self.refresh()
+
+        # 无感恢复：拖拽行摘掉 place，按新顺序重新 pack（不整屏 refresh）
+        if row is not None and row.winfo_manager() == 'place':
+            row.place_forget()
+        self._repack_group(final_ids)
 
 
 def _group_of(t):
