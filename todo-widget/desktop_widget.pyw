@@ -2058,7 +2058,7 @@ class TodoWidget:
                 for t in done_tasks:
                     self._render_task(t, parent=holder)
                 holder.update_idletasks()
-                holder.config(height=sum(c.winfo_reqheight() for c in holder.winfo_children()))
+                holder.config(height=self._holder_content_height(holder))
             self._done_holders[title] = holder
             # 折叠按钮始终在容器外，保证可见
             self._done_toggles[title] = self._render_done_toggle(
@@ -2107,8 +2107,7 @@ class TodoWidget:
             for t in done_tasks:
                 self._render_task(t, parent=holder)
             holder.update_idletasks()
-            # 用子行实际高度求和，避免 pack_propagate(False) 下 reqheight 不准确
-            target_h = sum(c.winfo_reqheight() for c in holder.winfo_children())
+            target_h = self._holder_content_height(holder)
 
         # 更新折叠按钮文字
         btn = self._done_toggles.get(title)
@@ -2128,6 +2127,15 @@ class TodoWidget:
             return
         holder.config(height=max(1, int(cur)))
         self.root.after(16, lambda: self._animate_height_step(holder, cur, target, delta, remain - 1))
+
+    def _holder_content_height(self, holder):
+        """返回 holder 内子行的实际占位高度（含 pack 的 pady 上下边距）。
+        用最后一个子行的 y+height 计算，避免 reqheight 求和漏掉 pady 导致最后一项被裁切。"""
+        children = holder.winfo_children()
+        if not children:
+            return 1
+        holder.update_idletasks()
+        return max(c.winfo_y() + c.winfo_height() for c in children)
 
     def _render_task(self, t, group_title=None, parent=None):
         data = load_all()
@@ -2270,6 +2278,23 @@ class TodoWidget:
 
         # 判断空位是否应上/下移动
         self._update_spacer(e, task)
+
+        # 拖动时界面随目标位置自动滚动（靠近可视区上下边缘时）
+        self._autoscroll_drag(e)
+
+    def _autoscroll_drag(self, e):
+        """拖动待办靠近 canvas 可视区上/下边缘时自动滚动列表。"""
+        if self._reorder_task is None:
+            return
+        # canvas 可视区在屏幕上的上下边界
+        top = self.canvas.winfo_rooty()
+        bottom = top + self.canvas.winfo_height()
+        edge = 28   # 触发滚动的边缘带宽度（px）
+        my = e.y_root
+        if my < top + edge:
+            self.canvas.yview_scroll(-2, 'units')
+        elif my > bottom - edge:
+            self.canvas.yview_scroll(2, 'units')
 
     def _group_bounds(self, row_h):
         """返回本组拖动行允许的 y 范围 (min_y, max_y)，相对 list_frame。"""
