@@ -2279,22 +2279,51 @@ class TodoWidget:
         # 判断空位是否应上/下移动
         self._update_spacer(e, task)
 
-        # 拖动时界面随目标位置自动滚动（靠近可视区上下边缘时）
+        # 拖动时界面随目标位置自动滚动（靠近可视区上下边缘时匀速滚动）
         self._autoscroll_drag(e)
 
+    # 自动滚动的匀速定时器状态
+    _autoscroll_dir = 0      # 0=停，-1=向上，1=向下
+    _autoscroll_after = None
+
     def _autoscroll_drag(self, e):
-        """拖动待办靠近 canvas 可视区上/下边缘时自动滚动列表。"""
+        """检测鼠标是否进入边缘触发带，控制匀速滚动定时器的启停。"""
         if self._reorder_task is None:
+            self._stop_autoscroll()
             return
-        # canvas 可视区在屏幕上的上下边界
         top = self.canvas.winfo_rooty()
         bottom = top + self.canvas.winfo_height()
-        edge = 28   # 触发滚动的边缘带宽度（px）
+        edge = 28
         my = e.y_root
         if my < top + edge:
-            self._drag_scroll_by(-0.2)
+            self._start_autoscroll(-1)
         elif my > bottom - edge:
-            self._drag_scroll_by(0.2)
+            self._start_autoscroll(1)
+        else:
+            self._stop_autoscroll()
+
+    def _start_autoscroll(self, direction):
+        if self._autoscroll_dir == direction and self._autoscroll_after is not None:
+            return
+        self._autoscroll_dir = direction
+        self._autoscroll_step()
+
+    def _stop_autoscroll(self):
+        self._autoscroll_dir = 0
+        if self._autoscroll_after is not None:
+            try:
+                self.root.after_cancel(self._autoscroll_after)
+            except Exception:
+                pass
+            self._autoscroll_after = None
+
+    def _autoscroll_step(self):
+        if self._autoscroll_dir == 0 or self._reorder_task is None:
+            self._stop_autoscroll()
+            return
+        self._drag_scroll_by(self._autoscroll_dir * 0.2)
+        # 继续匀速滚动，直到停止或拖拽结束
+        self._autoscroll_after = self.root.after(16, self._autoscroll_step)
 
     def _drag_scroll_by(self, frac):
         """按可视区高度的 frac 比例滚动（0.2 约等于缓慢滚动）。"""
@@ -2461,6 +2490,7 @@ class TodoWidget:
                 w.pack(fill='x', padx=6, pady=3)
 
     def _reorder_end(self, e, group_title):
+        self._stop_autoscroll()
         task = self._reorder_task
         self._reorder_task = None
         if task is None:
