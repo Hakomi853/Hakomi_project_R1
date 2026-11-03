@@ -1473,6 +1473,7 @@ class TodoWidget:
         self._done_holders = {}     # 组标题 -> 已完成区容器 frame（展开折叠动画用）
         self._done_toggles = {}     # 组标题 -> 折叠按钮 widget
         self._group_anchors = {}    # 组标题 -> 该组未完成行的锚点 widget（进度 card）
+        self._group_bottoms = {}    # 组标题 -> 该组底部锚点（下一组 card / holder / None）
 
         self.reminded = set()   # 已提醒 (task_id, date, time)
 
@@ -1978,6 +1979,7 @@ class TodoWidget:
         self._done_holders = {}
         self._done_toggles = {}
         self._group_anchors = {}
+        self._group_bottoms = {}
 
         if not tasks:
             tk.Label(self.list_frame,
@@ -1997,8 +1999,22 @@ class TodoWidget:
         self._render_group('本周进度', weekly_group, data, len(weekly_group))
         self._render_group('周期进度', custom_group, data, len(all_custom))
 
+        self._compute_group_bottoms()
+
         self.root.update_idletasks()
         self.canvas.yview_moveto(keep_y)
+
+    def _compute_group_bottoms(self):
+        """为每个已渲染组计算底部锚点 = 下一组进度 card（或 list_frame 末尾）。
+        用于把拖动空位限制在本组范围内，不落到下一组。"""
+        self._group_bottoms = {}
+        titles = [t for t in ('今日进度', '本周进度', '周期进度')
+                  if t in self._group_anchors]
+        for i, title in enumerate(titles):
+            if i + 1 < len(titles):
+                self._group_bottoms[title] = self._group_anchors[titles[i + 1]]
+            else:
+                self._group_bottoms[title] = None   # 最后一组，底部即列表末尾
 
     def _render_group(self, title, group, data, total):
         if not group:
@@ -2229,13 +2245,45 @@ class TodoWidget:
         self._reorder_moved = True
 
         row = self._reorder_row
-        # 被拖行跟随鼠标（相对 list_frame 居中）
+        # 被拖行跟随鼠标（相对 list_frame 居中），并钳制在本组上下边界内
         if row is not None:
-            new_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
-            row.place_configure(y=new_y)
+            raw_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
+            clamped_y = self._clamp_drag_y(raw_y, row)
+            row.place_configure(y=clamped_y)
+            # 触顶/触底挤压反馈：越界时略微压缩行高，回到范围内恢复
+            min_y, max_y = self._group_bounds(row.winfo_reqheight())
+            overflow = 0
+            if raw_y < min_y:
+                overflow = min_y - raw_y
+            elif raw_y > max_y:
+                overflow = raw_y - max_y
+            squeeze = min(14, overflow * 0.3)   # 最大压缩 14px，随越界量递增
+            base_h = self._reorder_row_h
+            row.place_configure(height=max(base_h - 8, base_h - squeeze))
 
         # 判断空位是否应上/下移动
         self._update_spacer(e, task)
+
+    def _group_bounds(self, row_h):
+        """返回本组拖动行允许的 y 范围 (min_y, max_y)，相对 list_frame。"""
+        anchor = self._group_anchors.get(self._reorder_group_title)
+        # 上边界：进度 card 底部（+ 一点边距）
+        min_y = 0
+        if anchor is not None:
+            min_y = anchor.winfo_rooty() - self.list_frame.winfo_rooty() + anchor.winfo_height()
+        # 下边界：组底部锚点顶部（holder/折叠按钮），减本行高度
+        bottom = self._group_bottom_anchor(self._reorder_group_title)
+        max_y = self.list_frame.winfo_height() - row_h
+        if bottom is not None:
+            max_y = bottom.winfo_rooty() - self.list_frame.winfo_rooty() - row_h
+        if max_y < min_y:
+            max_y = min_y
+        return min_y, max_y
+
+    def _clamp_drag_y(self, raw_y, row):
+        row_h = row.winfo_reqheight()
+        min_y, max_y = self._group_bounds(row_h)
+        return max(min_y, min(raw_y, max_y))
 
     def _begin_drag_float(self, e, task):
         row = self._reorder_row
@@ -2247,6 +2295,7 @@ class TodoWidget:
         row.place(x=6, width=self.list_frame.winfo_width() - 12)
         new_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
         row.place_configure(y=new_y)
+        row.lift()   # 确保被拖行在最上层，不被占位空位遮挡
         # 在原位置插入占位空位
         spacer = tk.Frame(self.list_frame, bg='#eef0f7', height=self._reorder_row_h)
         self._reorder_spacer = spacer
@@ -2254,6 +2303,7 @@ class TodoWidget:
         anchor = self._group_anchors.get(self._reorder_group_title)
         before = self._first_group_pack_before(anchor, exclude={task['id']})
         spacer.pack(fill='x', padx=6, pady=3, before=before)
+        spacer.lower()  # 空位置于底层，被拖行在其上
 
     def _first_group_pack_before(self, anchor, exclude=None):
         """返回锚点之后第一个应 pack 的 widget（用于 before）。"""
@@ -2271,6 +2321,22 @@ class TodoWidget:
                 if tid in exclude:
                     continue
                 return s
+        return None
+
+    def _group_bottom_anchor(self, title):
+        """返回本组的「底部锚点」：优先用下一组进度 card；无则用本组 holder/折叠按钮；
+        都没有则 None（组是最后一组，底部即列表末尾）。"""
+        # 下一组 card（若本组之后还有组）
+        bottom = self._group_bottoms.get(title)
+        if bottom is not None:
+            return bottom
+        # 本组 holder / 折叠按钮
+        holder = self._done_holders.get(title)
+        if holder is not None and holder.winfo_manager() == 'pack':
+            return holder
+        toggle = self._done_toggles.get(title)
+        if toggle is not None and toggle.winfo_manager() == 'pack':
+            return toggle
         return None
 
     def _update_spacer(self, e, task):
@@ -2305,12 +2371,12 @@ class TodoWidget:
         spacer = self._reorder_spacer
         if spacer is None:
             return
-        # task_rows 是视觉顺序的 (top,bottom,w,tid) 列表（不含 spacer）
-        # before 应是 task_rows[target_idx] 的 widget（若 target_idx < len），否则 None（末尾）
+        # task_rows 是视觉顺序的 (top,bottom,w,tid) 列表（不含 spacer、不含被拖行）
         if target_idx < len(task_rows):
             before = task_rows[target_idx][2]
         else:
-            before = None
+            # 已到本组末尾：锚定到组底部（holder/折叠按钮），不落到下一组
+            before = self._group_bottom_anchor(self._reorder_group_title)
         # 若 before 就是当前 spacer 的下一个，无需移动
         cur_before = None
         siblings = self.list_frame.pack_slaves()
