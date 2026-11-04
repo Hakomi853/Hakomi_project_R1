@@ -2281,6 +2281,14 @@ class TodoWidget:
         # 判断空位是否应上/下移动
         self._update_spacer(e, task)
 
+        # 维持层级：被拖行 > 指示线 > 其余行
+        if row is not None:
+            row.lift()
+        if self._reorder_spacer is not None:
+            self._reorder_spacer.lift()
+        if row is not None:
+            row.lift()
+
         # 拖动时界面随目标位置自动滚动（靠近可视区上下边缘时匀速滚动）
         self._autoscroll_drag(e)
 
@@ -2374,10 +2382,10 @@ class TodoWidget:
         row.place_configure(y=new_y)
         row.lift()   # 被拖行置顶
         # 空位用 place 的插入指示线（不占布局，其余行保持固定顺序靠拢，避免反馈错位）
-        spacer = tk.Frame(self.list_frame, bg=ACCENT, height=3)
+        spacer = tk.Frame(self.list_frame, bg=ACCENT, height=4)
         self._reorder_spacer = spacer
         spacer.place(x=6, width=self.list_frame.winfo_width() - 12, y=new_y)
-        spacer.lower()
+        spacer.lift()          # 指示线置于其余行之上（被拖行会再 lift 到更上层）
         self._reorder_target_idx = 0
 
     def _first_group_pack_before(self, anchor, exclude=None):
