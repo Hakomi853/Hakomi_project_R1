@@ -2373,11 +2373,12 @@ class TodoWidget:
         new_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
         row.place_configure(y=new_y)
         row.lift()   # 被拖行置顶
-        # 在原位置插入占位空位 spacer
-        spacer = tk.Frame(self.list_frame, bg='#eef0f7', height=self._reorder_row_h)
+        # 空位用 place 的插入指示线（不占布局，其余行保持固定顺序靠拢，避免反馈错位）
+        spacer = tk.Frame(self.list_frame, bg=ACCENT, height=3)
         self._reorder_spacer = spacer
-        # 初始空位在其余行最前（随后 _update_spacer 会按目标索引调整）
-        self._repack_with_spacer(0)
+        spacer.place(x=6, width=self.list_frame.winfo_width() - 12, y=new_y)
+        spacer.lower()
+        self._reorder_target_idx = 0
 
     def _first_group_pack_before(self, anchor, exclude=None):
         """返回锚点之后第一个应 pack 的 widget（用于 before）。"""
@@ -2414,14 +2415,14 @@ class TodoWidget:
         return None
 
     def _update_spacer(self, e, task):
-        """实时计算目标插入槽位，并重排「其余行 + 空位」让位（空位模式）。"""
+        """实时计算目标插入槽位，并把空位指示线移到该槽位（其余行不移动，避免错位）。"""
         idx = self._compute_target_idx(e, task)
-        if idx != self._reorder_target_idx:
-            self._reorder_target_idx = idx
-            self._repack_with_spacer(idx)
+        self._reorder_target_idx = idx
+        self._position_spacer_line(idx)
 
     def _compute_target_idx(self, e, task):
-        """根据被拖行中心 vs 其余行中线，算出被拖行应插入的索引（0..len(others)）。"""
+        """根据被拖行中心 vs 其余行中线，算出被拖行应插入的索引（0..len(others)）。
+        其余行保持固定顺序（未让位），中线稳定，不会反馈错位。"""
         drag_center = e.y_root
         others = []  # (center_y, tid)
         for w in self.list_frame.pack_slaves():
@@ -2438,43 +2439,27 @@ class TodoWidget:
             idx = len(others)
         return idx
 
-    def _repack_with_spacer(self, target_idx):
-        """把其余行按原 order 顺序 pack，并在 target_idx 处插入空位 spacer。
-        其余行顺序始终固定（不含被拖行），只有 spacer 位置变化 → 天然「让位」且不交换。"""
+    def _position_spacer_line(self, idx):
+        """把空位指示线（place）移动到第 idx 个其余行的上边界处。"""
         spacer = self._reorder_spacer
         if spacer is None:
             return
         task = self._reorder_task
-        # 其余行按原 order 排序
-        others = self._group_tasks(task)
-        others.sort(key=_order_key)
-        others = [t for t in others if t['id'] != task['id']]
-        # 全部摘掉 pack（含 spacer）
-        widgets = [self._row_widgets.get(t['id']) for t in others]
-        widgets = [w for w in widgets if w is not None]
-        for w in widgets:
-            if w.winfo_manager() == 'pack':
-                w.pack_forget()
-        spacer.pack_forget()
-        # 找锚点：本组进度 card 之后第一个 pack 行（组边界）
-        anchor = self._group_anchors.get(self._reorder_group_title)
-        before = self._first_group_pack_before(anchor, exclude={t['id'] for t in others})
-        # 依次 pack：先 pack target_idx 之前的行，再 spacer，再其余行
-        ordered_others = [t['id'] for t in others]
-        idx = max(0, min(target_idx, len(ordered_others)))
-        # 用 before 链式插入：从锚点之后按顺序摆
-        # 简单做法：先全部 pack 到锚点（顺序 others），再单独把 spacer 插到目标位置
-        # 这里直接按顺序 pack（不含 spacer），spacer 最后用 before 插到目标行之前
-        for oid in ordered_others:
-            w = self._row_widgets.get(oid)
-            if w is not None:
-                w.pack(fill='x', padx=6, pady=3, before=before)
-        # 插入 spacer 到目标位置（第 idx 个其余行之前；若 idx==len 则放最后）
-        if idx < len(ordered_others):
-            before_sp = self._row_widgets.get(ordered_others[idx])
+        others = []  # (top, widget)
+        for w in self.list_frame.pack_slaves():
+            tid = getattr(w, '_task_id', None)
+            if tid is not None and tid != task['id']:
+                others.append((w.winfo_rooty(), w))
+        others.sort(key=lambda x: x[0])
+        # 目标 y：第 idx 行的顶部；若 idx==len，则最后一行底部
+        if idx < len(others):
+            y = others[idx][0] - self.list_frame.winfo_rooty()
+        elif others:
+            last = others[-1][1]
+            y = last.winfo_rooty() + last.winfo_height() - self.list_frame.winfo_rooty()
         else:
-            before_sp = None
-        spacer.pack(fill='x', padx=6, pady=3, before=before_sp)
+            y = 0
+        spacer.place_configure(y=y)
 
     def _repack_group(self, ordered_ids, group_title=None):
         """按给定顺序把本组未完成行 pack 回原位（锚定进度 card 之后，用 before 定位）。"""
