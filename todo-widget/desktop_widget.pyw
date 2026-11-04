@@ -2429,23 +2429,53 @@ class TodoWidget:
             self._repack_with_gap(idx)
 
     def _compute_target_idx(self, e, task):
-        """根据被拖行中心 vs 同组其余行中线，算出应插入的索引（0..len(others)）。
-        只统计同组行；其余行顺序固定（仅空位让位），判定稳定。"""
-        drag_center = e.y_root
+        """增量式换位判定（以当前空位槽位为基准，每次最多跨一格）：
+        - 向下拖：被拖行顶部越过「下一行」高度的 2/3 线 → 空位下移一格
+        - 向上拖：被拖行底部低于「上一行」高度的 1/3 线（即越过其 2/3 深度）→ 空位上移一格
+        使用被拖行实际几何位置（含钳制/挤压），判定灵敏且稳定。"""
+        TH = 2.0 / 3.0   # 换位阈值比例
+        row = self._reorder_row
+        # 被拖行实际几何（考虑挤压后的高度）
+        if row is not None and row.winfo_manager() == 'place':
+            h = row.winfo_height()
+            if h <= 1:
+                h = self._reorder_row_h
+            x_top = row.winfo_rooty()
+        else:
+            h = self._reorder_row_h
+            x_top = e.y_root - h / 2
+        x_bottom = x_top + h
+
         group_ids = {t['id'] for t in self._group_tasks(task)}
-        others = []  # (center_y, tid)
+        others = []  # (top, height)
         for w in self.list_frame.pack_slaves():
             tid = getattr(w, '_task_id', None)
             if tid is not None and tid != task['id'] and tid in group_ids:
-                others.append((w.winfo_rooty() + w.winfo_height() / 2, tid))
+                others.append((w.winfo_rooty(), w.winfo_height()))
         others.sort(key=lambda x: x[0])
-        idx = 0
-        for i, (center, tid) in enumerate(others):
-            if drag_center < center:
-                idx = i
+
+        idx = max(0, min(self._reorder_target_idx, len(others)))
+        # 循环处理连续跨行（鼠标快速移动时一次事件可跨多格）
+        while True:
+            moved = False
+            # 向下：顶部越过下一行的 2/3 线 → 空位下移
+            if idx < len(others):
+                t0, hh = others[idx]
+                if hh <= 0:
+                    hh = self._reorder_row_h
+                if x_top > t0 + hh * TH:
+                    idx += 1
+                    moved = True
+            # 向上：底部低于上一行的 1/3 线 → 空位上移
+            if not moved and idx > 0:
+                t0, hh = others[idx - 1]
+                if hh <= 0:
+                    hh = self._reorder_row_h
+                if x_bottom < t0 + hh * (1 - TH):
+                    idx -= 1
+                    moved = True
+            if not moved:
                 break
-        else:
-            idx = len(others)
         return idx
 
     def _repack_with_gap(self, idx):
