@@ -1470,6 +1470,7 @@ class TodoWidget:
         self._reorder_group_title = None
         self._reorder_row_h = 46
         self._reorder_target_idx = 0
+        self._gap_rows = []   # 拖动让位时其余行的 [(tid, widget, natural_top)]
         self._row_widgets = {}      # task_id -> 渲染的行 frame（拖动让位用）
         self._done_holders = {}     # 组标题 -> 已完成区容器 frame（展开折叠动画用）
         self._done_toggles = {}     # 组标题 -> 折叠按钮 widget
@@ -2229,6 +2230,7 @@ class TodoWidget:
             self._reorder_row_h = 46
         self._reorder_target_idx = 0
         self._reorder_spacer = None
+        self._gap_rows = []
 
     def _group_tasks(self, task):
         data = load_all()
@@ -2381,12 +2383,32 @@ class TodoWidget:
         new_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
         row.place_configure(y=new_y)
         row.lift()   # 被拖行置顶
-        # 空位用 place 的插入指示线（不占布局，其余行保持固定顺序靠拢，避免反馈错位）
-        spacer = tk.Frame(self.list_frame, bg=ACCENT, height=4)
+
+        # 其余同组未完成行转 place，记录自然位置，供「等规格空位让位」
+        others = self._group_tasks(task)
+        others.sort(key=_order_key)
+        self._gap_rows = []   # [(tid, natural_top_rel)]
+        for t in others:
+            if t['id'] == task['id']:
+                continue
+            w = self._row_widgets.get(t['id'])
+            if w is None:
+                continue
+            if w.winfo_manager() == 'pack':
+                w.pack_forget()
+                top = w.winfo_rooty() - self.list_frame.winfo_rooty()
+                w.place(x=6, y=top, width=self.list_frame.winfo_width() - 12)
+            else:
+                top = w.winfo_rooty() - self.list_frame.winfo_rooty()
+            self._gap_rows.append((t['id'], w, top))
+
+        # 等规格空位块（与被拖行同高）
+        spacer = tk.Frame(self.list_frame, bg='#eef0f7', height=self._reorder_row_h)
         self._reorder_spacer = spacer
         spacer.place(x=6, width=self.list_frame.winfo_width() - 12, y=new_y)
-        spacer.lift()          # 指示线置于其余行之上（被拖行会再 lift 到更上层）
+        spacer.lift()
         self._reorder_target_idx = 0
+        self._apply_gap_layout(0)
 
     def _first_group_pack_before(self, anchor, exclude=None):
         """返回锚点之后第一个应 pack 的 widget（用于 before）。"""
@@ -2430,44 +2452,53 @@ class TodoWidget:
 
     def _compute_target_idx(self, e, task):
         """根据被拖行中心 vs 其余行中线，算出被拖行应插入的索引（0..len(others)）。
-        其余行保持固定顺序（未让位），中线稳定，不会反馈错位。"""
+        用其余行的自然位置（让位前记录的 top）算中线，位置稳定不反馈。"""
         drag_center = e.y_root
-        others = []  # (center_y, tid)
-        for w in self.list_frame.pack_slaves():
-            tid = getattr(w, '_task_id', None)
-            if tid is not None and tid != task['id']:
-                others.append((w.winfo_rooty() + w.winfo_height() / 2, tid))
-        others.sort(key=lambda x: x[0])
+        rows = getattr(self, '_gap_rows', [])
+        if not rows:
+            return 0
+        lf_rooty = self.list_frame.winfo_rooty()
         idx = 0
-        for i, (center, tid) in enumerate(others):
+        for i, (tid, w, top) in enumerate(rows):
+            center = lf_rooty + top + w.winfo_reqheight() / 2
             if drag_center < center:
                 idx = i
                 break
         else:
-            idx = len(others)
+            idx = len(rows)
         return idx
 
     def _position_spacer_line(self, idx):
-        """把空位指示线（place）移动到第 idx 个其余行的上边界处。"""
+        """把等规格空位块（place）移动到第 idx 个其余行的上边界处。"""
+        self._apply_gap_layout(idx)
+
+    def _apply_gap_layout(self, idx):
+        """按目标索引 idx 让位：其余行前 idx 个在原位，第 idx 及之后的整体下移一个空位高度，
+        空位块（等规格）放在腾出的槽位。用 place 精确控制，消除 pack 反馈错位。"""
         spacer = self._reorder_spacer
         if spacer is None:
             return
-        task = self._reorder_task
-        others = []  # (top, widget)
-        for w in self.list_frame.pack_slaves():
-            tid = getattr(w, '_task_id', None)
-            if tid is not None and tid != task['id']:
-                others.append((w.winfo_rooty(), w))
-        others.sort(key=lambda x: x[0])
-        # 目标 y：第 idx 行的顶部；若 idx==len，则最后一行底部
-        if idx < len(others):
-            y = others[idx][0] - self.list_frame.winfo_rooty()
-        elif others:
-            last = others[-1][1]
-            y = last.winfo_rooty() + last.winfo_height() - self.list_frame.winfo_rooty()
+        gap_h = self._reorder_row_h
+        rows = self._gap_rows   # [(tid, widget, natural_top_rel)]，natural_top_rel 已按视觉排序
+        # natural_top_rel 可能不是严格递增（含各行的 pady），按当前记录即可
+        # 计算空位插入位置（相对 list_frame）
+        if idx < len(rows):
+            gap_y = rows[idx][2]
         else:
-            y = 0
-        spacer.place_configure(y=y)
+            if rows:
+                last_top, last_h = rows[-1][2], rows[-1][1].winfo_reqheight()
+                gap_y = last_top + last_h
+            else:
+                gap_y = 0
+        # 其余行：idx 之前的行保持原位，idx 及之后下移 gap_h
+        for i, (tid, w, top) in enumerate(rows):
+            if i < idx:
+                new_top = top
+            else:
+                new_top = top + gap_h
+            w.place_configure(y=new_top)
+        # 空位块放到 gap_y
+        spacer.place_configure(y=gap_y)
 
     def _repack_group(self, ordered_ids, group_title=None):
         """按给定顺序把本组未完成行 pack 回原位（锚定进度 card 之后，用 before 定位）。"""
@@ -2505,6 +2536,12 @@ class TodoWidget:
             if row is not None and row.winfo_manager() == 'place':
                 row.place_forget()
                 row.pack(fill='x', padx=6, pady=3)
+            # 恢复其余行从 place 回 pack
+            for (tid, w, top) in self._gap_rows:
+                if w.winfo_manager() == 'place':
+                    w.place_forget()
+                    w.pack(fill='x', padx=6, pady=3)
+            self._gap_rows = []
             # 清理可能残留的空位
             if self._reorder_spacer is not None:
                 self._reorder_spacer.destroy()
@@ -2534,6 +2571,7 @@ class TodoWidget:
             self._reorder_spacer = None
         if row is not None and row.winfo_manager() == 'place':
             row.place_forget()
+        self._gap_rows = []
         self._repack_group(base_ids, group_title=group_title)
 
 
