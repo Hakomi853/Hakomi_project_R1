@@ -1465,6 +1465,7 @@ class TodoWidget:
         self._done_collapsed = {}   # 各类型「折叠已完成」状态 {group_title: bool}
         self._reorder_task = None   # 正在拖拽排序的任务
         self._reorder_row = None    # 被拖拽的行 widget
+        self._reorder_spacer = None # 拖动时留下的占位空位
         self._reorder_moved = False
         self._reorder_group_title = None
         self._reorder_row_h = 46
@@ -2227,6 +2228,7 @@ class TodoWidget:
         else:
             self._reorder_row_h = 46
         self._reorder_target_idx = 0
+        self._reorder_spacer = None
 
     def _group_tasks(self, task):
         data = load_all()
@@ -2365,12 +2367,17 @@ class TodoWidget:
         row = self._reorder_row
         if row is None:
             return
-        # 浮起被拖行（从 pack 摘除后，其余行会自动靠拢，天然形成「空位」）
+        # 浮起被拖行（place 跟随鼠标）
         row.pack_forget()
         row.place(x=6, width=self.list_frame.winfo_width() - 12)
         new_y = e.y_root - self.list_frame.winfo_rooty() - row.winfo_reqheight() / 2
         row.place_configure(y=new_y)
-        row.lift()   # 被拖行置顶，盖在其余行之上
+        row.lift()   # 被拖行置顶
+        # 在原位置插入占位空位 spacer
+        spacer = tk.Frame(self.list_frame, bg='#eef0f7', height=self._reorder_row_h)
+        self._reorder_spacer = spacer
+        # 初始空位在其余行最前（随后 _update_spacer 会按目标索引调整）
+        self._repack_with_spacer(0)
 
     def _first_group_pack_before(self, anchor, exclude=None):
         """返回锚点之后第一个应 pack 的 widget（用于 before）。"""
@@ -2407,10 +2414,11 @@ class TodoWidget:
         return None
 
     def _update_spacer(self, e, task):
-        """实时计算被拖行的目标插入槽位（其余行已自然靠拢，无需移动）。
-        拖动过程中只记录当前目标索引，供松手时使用；同时更新其余行的
-        中线高亮提示（可选）。"""
-        self._reorder_target_idx = self._compute_target_idx(e, task)
+        """实时计算目标插入槽位，并重排「其余行 + 空位」让位（空位模式）。"""
+        idx = self._compute_target_idx(e, task)
+        if idx != self._reorder_target_idx:
+            self._reorder_target_idx = idx
+            self._repack_with_spacer(idx)
 
     def _compute_target_idx(self, e, task):
         """根据被拖行中心 vs 其余行中线，算出被拖行应插入的索引（0..len(others)）。"""
@@ -2429,6 +2437,44 @@ class TodoWidget:
         else:
             idx = len(others)
         return idx
+
+    def _repack_with_spacer(self, target_idx):
+        """把其余行按原 order 顺序 pack，并在 target_idx 处插入空位 spacer。
+        其余行顺序始终固定（不含被拖行），只有 spacer 位置变化 → 天然「让位」且不交换。"""
+        spacer = self._reorder_spacer
+        if spacer is None:
+            return
+        task = self._reorder_task
+        # 其余行按原 order 排序
+        others = self._group_tasks(task)
+        others.sort(key=_order_key)
+        others = [t for t in others if t['id'] != task['id']]
+        # 全部摘掉 pack（含 spacer）
+        widgets = [self._row_widgets.get(t['id']) for t in others]
+        widgets = [w for w in widgets if w is not None]
+        for w in widgets:
+            if w.winfo_manager() == 'pack':
+                w.pack_forget()
+        spacer.pack_forget()
+        # 找锚点：本组进度 card 之后第一个 pack 行（组边界）
+        anchor = self._group_anchors.get(self._reorder_group_title)
+        before = self._first_group_pack_before(anchor, exclude={t['id'] for t in others})
+        # 依次 pack：先 pack target_idx 之前的行，再 spacer，再其余行
+        ordered_others = [t['id'] for t in others]
+        idx = max(0, min(target_idx, len(ordered_others)))
+        # 用 before 链式插入：从锚点之后按顺序摆
+        # 简单做法：先全部 pack 到锚点（顺序 others），再单独把 spacer 插到目标位置
+        # 这里直接按顺序 pack（不含 spacer），spacer 最后用 before 插到目标行之前
+        for oid in ordered_others:
+            w = self._row_widgets.get(oid)
+            if w is not None:
+                w.pack(fill='x', padx=6, pady=3, before=before)
+        # 插入 spacer 到目标位置（第 idx 个其余行之前；若 idx==len 则放最后）
+        if idx < len(ordered_others):
+            before_sp = self._row_widgets.get(ordered_others[idx])
+        else:
+            before_sp = None
+        spacer.pack(fill='x', padx=6, pady=3, before=before_sp)
 
     def _repack_group(self, ordered_ids, group_title=None):
         """按给定顺序把本组未完成行 pack 回原位（锚定进度 card 之后，用 before 定位）。"""
@@ -2466,10 +2512,14 @@ class TodoWidget:
             if row is not None and row.winfo_manager() == 'place':
                 row.place_forget()
                 row.pack(fill='x', padx=6, pady=3)
+            # 清理可能残留的空位
+            if self._reorder_spacer is not None:
+                self._reorder_spacer.destroy()
+                self._reorder_spacer = None
             return
 
-        # 按被拖行中心 vs 其余行中线，算出最终插入索引
-        slot = self._compute_target_idx(e, task)
+        # 用拖动过程中记录的目标索引
+        slot = self._reorder_target_idx
 
         # 其余行按原 order 排序（不含被拖行）
         group_ids = self._ordered_group_ids(task)
@@ -2485,7 +2535,10 @@ class TodoWidget:
                     x['order'] = i
         save_all(data)
 
-        # 被拖行补回 pack（按新顺序，锚定原位）
+        # 销毁空位，被拖行补回 pack（按新顺序，锚定原位）
+        if self._reorder_spacer is not None:
+            self._reorder_spacer.destroy()
+            self._reorder_spacer = None
         if row is not None and row.winfo_manager() == 'place':
             row.place_forget()
         self._repack_group(base_ids, group_title=group_title)
