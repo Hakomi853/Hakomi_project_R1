@@ -2229,6 +2229,7 @@ class TodoWidget:
             self._reorder_row_h = 46
         self._reorder_target_idx = 0
         self._reorder_spacer = None
+        self._reorder_last_y = None   # 上次鼠标 y，用于判定拖动方向
 
     def _group_tasks(self, task):
         data = load_all()
@@ -2278,8 +2279,16 @@ class TodoWidget:
                 # 正常范围：完整高度跟随鼠标
                 row.place_configure(y=self._clamp_drag_y(raw_y, row), height=base_h)
 
-        # 判断空位是否应上/下移动
-        self._update_spacer(e, task)
+        # 判断空位是否应上/下移动（按本次鼠标移动方向单向判定，避免双向震荡）
+        last_y = getattr(self, '_reorder_last_y', None)
+        direction = 0
+        if last_y is not None:
+            if e.y_root > last_y:
+                direction = 1
+            elif e.y_root < last_y:
+                direction = -1
+        self._reorder_last_y = e.y_root
+        self._update_spacer(e, task, direction)
 
         # 被拖行始终置顶（空位与其余行在 pack 层，自然位于其下）
         if row is not None:
@@ -2421,18 +2430,19 @@ class TodoWidget:
             return bottom
         return None
 
-    def _update_spacer(self, e, task):
-        """实时计算目标插入槽位；槽位变化时重排「其余行 + 等规格空位」让位。"""
-        idx = self._compute_target_idx(e, task)
+    def _update_spacer(self, e, task, direction=0):
+        """实时计算目标插入槽位；槽位变化时重排「其余行 + 等规格空位」让位。
+        direction：本次鼠标移动方向（1=向下，-1=向上，0=水平/首次），单向判定避免震荡。"""
+        idx = self._compute_target_idx(e, task, direction)
         if idx != self._reorder_target_idx:
             self._reorder_target_idx = idx
             self._repack_with_gap(idx)
 
-    def _compute_target_idx(self, e, task):
-        """增量式换位判定（以当前空位槽位为基准，每次最多跨一格）：
-        - 向下拖：被拖行顶部越过「下一行」高度的 2/3 线 → 空位下移一格
-        - 向上拖：被拖行底部低于「上一行」高度的 1/3 线（即越过其 2/3 深度）→ 空位上移一格
-        使用被拖行实际几何位置（含钳制/挤压），判定灵敏且稳定。"""
+    def _compute_target_idx(self, e, task, direction=0):
+        """增量式换位判定（以当前空位槽位为基准，单向逐步移动）：
+        - 向下拖：被拖行底部（下界）越过「下一行」高度的 2/3 线 → 空位下移一格
+        - 向上拖：被拖行顶部（上界）越过「上一行」高度的 1/3 线（即覆盖其 2/3 深度）→ 空位上移一格
+        使用被拖行实际几何位置（含钳制/挤压），按方向单向推进，稳定无震荡。"""
         TH = 2.0 / 3.0   # 换位阈值比例
         row = self._reorder_row
         # 被拖行实际几何（考虑挤压后的高度）
@@ -2455,27 +2465,26 @@ class TodoWidget:
         others.sort(key=lambda x: x[0])
 
         idx = max(0, min(self._reorder_target_idx, len(others)))
-        # 循环处理连续跨行（鼠标快速移动时一次事件可跨多格）
-        while True:
-            moved = False
-            # 向下：顶部越过下一行的 2/3 线 → 空位下移
-            if idx < len(others):
+        if direction > 0:
+            # 向下：底部（下界）越过下一行的 2/3 线 → 空位下移（可连跨多行）
+            while idx < len(others):
                 t0, hh = others[idx]
                 if hh <= 0:
                     hh = self._reorder_row_h
-                if x_top > t0 + hh * TH:
+                if x_bottom > t0 + hh * TH:
                     idx += 1
-                    moved = True
-            # 向上：底部低于上一行的 1/3 线 → 空位上移
-            if not moved and idx > 0:
+                else:
+                    break
+        elif direction < 0:
+            # 向上：顶部（上界）越过上一行的 1/3 线 → 空位上移（可连跨多行）
+            while idx > 0:
                 t0, hh = others[idx - 1]
                 if hh <= 0:
                     hh = self._reorder_row_h
-                if x_bottom < t0 + hh * (1 - TH):
+                if x_top < t0 + hh * (1 - TH):
                     idx -= 1
-                    moved = True
-            if not moved:
-                break
+                else:
+                    break
         return idx
 
     def _repack_with_gap(self, idx):
