@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | [`todo-widget/`](todo-widget/) | 每日待办 · 桌面悬浮挂件 | Python 3 + tkinter + HTML | 无边框置顶小挂件，支持每日/一次性/每周/自定义周期任务、到点提醒与打卡历史 |
 | [`battery-management/`](battery-management/) | 电池管理 · 满电/养护一键切换 | Windows Script Host + Node.js | 联想笔记本充电模式按钮，满电 100% ↔ 养护 80%，附带开机自启守护 |
+| [`hover-folder/`](hover-folder/) | 悬浮文件夹 | C# + WPF | 桌面悬停预览、自定义标题和拖动排序 |
 
 ## 使用约定
 
