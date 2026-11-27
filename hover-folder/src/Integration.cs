@@ -49,13 +49,22 @@ static class ShellDesktop {
     [DllImport("user32",CharSet=CharSet.Unicode)]static extern int GetClassName(IntPtr h,StringBuilder s,int n);
     [DllImport("oleacc")]static extern int AccessibleObjectFromPoint(D.Point p,[MarshalAs(UnmanagedType.Interface)]out Accessibility.IAccessible obj,[MarshalAs(UnmanagedType.Struct)]out object child);
     static string Class(IntPtr h){var s=new StringBuilder(80);GetClassName(h,s,80);return s.ToString();}
+    internal static IntPtr DesktopAt(D.Point point){
+        var handle=WindowFromPoint(point);
+        if(Class(handle)!="SysListView32"||Class(GetParent(handle))!="SHELLDLL_DefView")return IntPtr.Zero;
+        string host=Class(GetParent(GetParent(handle)));
+        return host=="Progman"||host=="WorkerW"?handle:IntPtr.Zero;
+    }
     internal static string Hit(out Rect bounds){
-        bounds=Rect.Empty;if(System.Windows.Forms.Control.MouseButtons!=System.Windows.Forms.MouseButtons.None)return null;
-        var p=System.Windows.Forms.Cursor.Position;var h=WindowFromPoint(p);
-        if(Class(h)!="SysListView32"||Class(GetParent(h))!="SHELLDLL_DefView")return null;
-        string host=Class(GetParent(GetParent(h)));if(host!="Progman"&&host!="WorkerW")return null;
+        bounds=Rect.Empty;
+        if(System.Windows.Forms.Control.MouseButtons!=System.Windows.Forms.MouseButtons.None)return null;
+        return Hit(System.Windows.Forms.Cursor.Position,out bounds);
+    }
+    internal static string Hit(D.Point point,out Rect bounds){
+        bounds=Rect.Empty;
+        if(DesktopAt(point)==IntPtr.Zero)return null;
         Accessibility.IAccessible a=null;
-        try{object child;if(AccessibleObjectFromPoint(p,out a,out child)!=0||a==null)return null;
+        try{object child;if(AccessibleObjectFromPoint(point,out a,out child)!=0||a==null)return null;
             if(Convert.ToInt32(a.get_accRole(child))!=34)return null;
             int x,y,w,height;a.accLocation(out x,out y,out w,out height,child);if(w<=0||height<=0)return null;
             bounds=new Rect(x/Native.Scale,y/Native.Scale,w/Native.Scale,height/Native.Scale);return a.get_accName(child);
@@ -115,6 +124,49 @@ static class ShellDesktop {
             }else link.IconLocation=Path.Combine(Environment.SystemDirectory,"shell32.dll")+",3";
             link.Save();
         }finally{if(sc!=null)Marshal.ReleaseComObject(sc);if(sh!=null)Marshal.ReleaseComObject(sh);}
+    }
+}
+sealed class DesktopClickListener : IDisposable {
+    const int LowLevelMouse=14, MouseMove=0x200, LeftDown=0x201, LeftUp=0x202;
+    delegate IntPtr MouseCallback(int code,IntPtr message,IntPtr data);
+    [DllImport("user32",SetLastError=true)] static extern IntPtr SetWindowsHookEx(int type,MouseCallback callback,IntPtr module,uint thread);
+    [DllImport("user32")] static extern IntPtr CallNextHookEx(IntPtr hook,int code,IntPtr message,IntPtr data);
+    [DllImport("user32")] static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("kernel32",CharSet=CharSet.Unicode)] static extern IntPtr GetModuleHandle(string module);
+    readonly System.Windows.Threading.Dispatcher dispatcher;
+    readonly MouseCallback callback;
+    readonly Action<D.Point> clicked;
+    readonly D.Size dragSize=System.Windows.Forms.SystemInformation.DragSize;
+    IntPtr hook, pressedDesktop;
+    D.Point pressed;
+
+    internal DesktopClickListener(System.Windows.Threading.Dispatcher dispatcher,Action<D.Point> clicked){
+        this.dispatcher=dispatcher;this.clicked=clicked;
+        callback=Observe;
+        hook=SetWindowsHookEx(LowLevelMouse,callback,GetModuleHandle(null),0);
+    }
+    IntPtr Observe(int code,IntPtr message,IntPtr data){
+        if(code>=0){
+            int kind=message.ToInt32();
+            if(kind==LeftDown){
+                pressed=new D.Point(Marshal.ReadInt32(data),Marshal.ReadInt32(data,4));
+                pressedDesktop=ShellDesktop.DesktopAt(pressed);
+            }else if(pressedDesktop!=IntPtr.Zero&&(kind==MouseMove||kind==LeftUp)){
+                var point=new D.Point(Marshal.ReadInt32(data),Marshal.ReadInt32(data,4));
+                if(Math.Abs(point.X-pressed.X)*2>=dragSize.Width||Math.Abs(point.Y-pressed.Y)*2>=dragSize.Height)
+                    pressedDesktop=IntPtr.Zero;
+                if(kind==LeftUp){
+                    var desktop=pressedDesktop;pressedDesktop=IntPtr.Zero;
+                    if(desktop!=IntPtr.Zero&&ShellDesktop.DesktopAt(point)==desktop&&!dispatcher.HasShutdownStarted)
+                        dispatcher.BeginInvoke(new Action(()=>clicked(point)));
+                }
+            }
+        }
+        return CallNextHookEx(hook,code,message,data);
+    }
+    public void Dispose(){
+        if(hook==IntPtr.Zero)return;
+        UnhookWindowsHookEx(hook);hook=IntPtr.Zero;
     }
 }
 static class Palette {

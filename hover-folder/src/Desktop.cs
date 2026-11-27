@@ -49,6 +49,12 @@ class Program {
         string file=Path.Combine(Home,"folders.xml");doc.Save(file+".tmp");
         if(File.Exists(file))File.Replace(file+".tmp",file,null);else File.Move(file+".tmp",file);
     }
+    static void OpenClickedFolder(D.Point point){
+        Rect anchor;
+        string name=ShellDesktop.Hit(point,out anchor);
+        var widget=Widgets.FirstOrDefault(item=>item.MatchesDesktopName(name));
+        if(widget!=null)widget.OpenFromClick(anchor);
+    }
     [STAThread] static void Main(string[] args){
         bool first;
         using(var mutex=new Mutex(true,"Local\\DeskFoldersV2",out first))
@@ -73,7 +79,8 @@ class Program {
                 }
                 Save();app.Exit+=(s,e)=>{foreach(var w in Widgets)w.Close();};if(Widgets.Count==0||args.Contains("/manage"))Manage(Widgets.FirstOrDefault());
                 monitor=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(350)};
-                monitor.Tick+=(s,e)=>{if(signal.WaitOne(0))Manage(Widgets.FirstOrDefault());};monitor.Start();app.Run();
+                monitor.Tick+=(s,e)=>{if(signal.WaitOne(0))Manage(Widgets.FirstOrDefault());};monitor.Start();
+                using(new DesktopClickListener(app.Dispatcher,OpenClickedFolder))app.Run();
             }catch(Exception ex){MessageBox.Show(ex.Message,"悬浮文件夹");}
         }
     }
@@ -286,11 +293,23 @@ class Widget {
     static string Hit(out Rect bounds){
         int now=Environment.TickCount;if(unchecked(now-lastHit)>35||lastHit==0){lastHit=now;lastName=ShellDesktop.Hit(out lastBounds);}bounds=lastBounds;return lastName;
     }
+    internal bool MatchesDesktopName(string name){
+        string leaf=Path.GetFileNameWithoutExtension(F.Link);
+        return name!=null&&(Same(name,leaf)||Same(name,leaf+".lnk"));
+    }
+    internal void OpenFromClick(Rect bounds){
+        if(previewing||disposed)return;
+        anchor=bounds;armed=false;over=true;departed=DateTime.UtcNow;
+        if(popup!=null&&popup.IsVisible){
+            if(closing)Animate(true,false);
+            return;
+        }
+        if(!busy){page=0;Read(true,true);}
+    }
     void Hover(){
         if(DateTime.UtcNow>=nextTrack){nextTrack=DateTime.UtcNow.AddSeconds(2);Track();}
         if(previewing){if(dirty&&!busy&&(previewDrag==null||!previewDrag.Active))Read(false);return;}
-        Rect r;string name=Hit(out r);string leaf=Path.GetFileNameWithoutExtension(F.Link);
-        bool here=name!=null&&(Same(name,leaf)||Same(name,leaf+".lnk"));
+        Rect r;bool here=MatchesDesktopName(Hit(out r));
         if(here){anchor=r;if(!over)entered=DateTime.UtcNow;}
         else armed=true;over=here;
         if(popup!=null&&popup.IsVisible){
@@ -366,7 +385,7 @@ class Widget {
         if(pageTarget!=null)Render(false);
         return true;
     }
-    async void Read(bool opening){
+    async void Read(bool opening,bool clicked=false){
         busy=true;dirty=false;int stamp=++version;string path=F.Path;string message=null;
         var ranks=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
         foreach(string name in F.Order)ranks[name]=ranks.Count;
@@ -374,7 +393,7 @@ class Widget {
             .OrderBy(f=>ranks.ContainsKey(f.Name)?ranks[f.Name]:int.MaxValue).ThenBy(f=>(f.Attributes&FileAttributes.Directory)==0).ThenBy(f=>f.Name,StringComparer.CurrentCultureIgnoreCase).ToArray();}
             catch(Exception ex){message=ex.Message;return new FileSystemInfo[0];}});
         if(stamp!=version)return;busy=false;files=result;issue=message;
-        if(opening&&!over)return;Render(opening);
+        if(opening&&!over&&!clicked)return;Render(opening);
     }
     async void LoadIcon(Image image,string path){
         double scale=VisualTreeHelper.GetDpi(image).DpiScaleX;
